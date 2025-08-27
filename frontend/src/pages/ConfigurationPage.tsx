@@ -14,7 +14,7 @@ const ConfigurationPage: React.FC = () => {
     broker_port: 1883,
     username: '',
     password: '',
-    topic: 'lab/#',
+    topic: 'cell/#',
     discovery_duration: 30
   });
 
@@ -85,101 +85,11 @@ const ConfigurationPage: React.FC = () => {
           const statusResponse = await fetch(getApiUrl(API_ENDPOINTS.MQTT_DISCOVERY_STATUS));
           if (statusResponse.ok) {
             const discoveryData = await statusResponse.json();
-            if (discoveryData.discovered_nodes && discoveryData.discovered_nodes.length > 0) {
-              setDiscoveredNodesState(discoveryData.discovered_nodes);
-            } else {
-              // Fallback to mock data if no real data available
-              const mockNodes: DiscoveredNode[] = [
-                {
-                  id: 'furnace_01',
-                  equipment_id: 'furnace_01',
-                  equipment_type: 'furnace',
-                  topics: ['lab/furnace/temperature', 'lab/furnace/pressure'],
-                  sample_data: { temperature: 850, pressure: 2.1, status: 'heating' },
-                  message_count: 45,
-                  first_seen: new Date().toISOString(),
-                  last_seen: new Date().toISOString()
-                },
-                {
-                  id: 'melter_01',
-                  equipment_id: 'melter_01',
-                  equipment_type: 'melter',
-                  topics: ['lab/melter/temperature', 'lab/melter/flow_rate'],
-                  sample_data: { temperature: 1200, flow_rate: 15.5, status: 'melting' },
-                  message_count: 38,
-                  first_seen: new Date().toISOString(),
-                  last_seen: new Date().toISOString()
-                },
-                {
-                  id: 'anvil_01',
-                  equipment_id: 'anvil_01',
-                  equipment_type: 'anvil',
-                  topics: ['lab/anvil/force', 'lab/anvil/position'],
-                  sample_data: { force: 2500, position: 'center', status: 'idle' },
-                  message_count: 22,
-                  first_seen: new Date().toISOString(),
-                  last_seen: new Date().toISOString()
-                },
-                {
-                  id: 'conveyor_01',
-                  equipment_id: 'conveyor_01',
-                  equipment_type: 'conveyor',
-                  topics: ['lab/conveyor/speed', 'lab/conveyor/position'],
-                  sample_data: { speed: 1.5, position: 45, status: 'transporting' },
-                  message_count: 28,
-                  first_seen: new Date().toISOString(),
-                  last_seen: new Date().toISOString()
-                }
-              ];
-              setDiscoveredNodesState(mockNodes);
-            }
+            setDiscoveredNodesState(discoveryData.discovered_nodes || []);
           }
         } catch (error) {
           console.error('Failed to get discovery results:', error);
-          // Use mock data as fallback
-          const mockNodes: DiscoveredNode[] = [
-            {
-              id: 'furnace_01',
-              equipment_id: 'furnace_01',
-              equipment_type: 'furnace',
-              topics: ['lab/furnace/temperature', 'lab/furnace/pressure'],
-              sample_data: { temperature: 850, pressure: 2.1, status: 'heating' },
-              message_count: 45,
-              first_seen: new Date().toISOString(),
-              last_seen: new Date().toISOString()
-            },
-            {
-              id: 'melter_01',
-              equipment_id: 'melter_01',
-              equipment_type: 'melter',
-              topics: ['lab/melter/temperature', 'lab/melter/flow_rate'],
-              sample_data: { temperature: 1200, flow_rate: 15.5, status: 'melting' },
-              message_count: 38,
-              first_seen: new Date().toISOString(),
-              last_seen: new Date().toISOString()
-            },
-            {
-              id: 'anvil_01',
-              equipment_id: 'anvil_01',
-              equipment_type: 'anvil',
-              topics: ['lab/anvil/force', 'lab/anvil/position'],
-              sample_data: { force: 2500, position: 'center', status: 'idle' },
-              message_count: 22,
-              first_seen: new Date().toISOString(),
-              last_seen: new Date().toISOString()
-            },
-            {
-              id: 'conveyor_01',
-              equipment_id: 'conveyor_01',
-              equipment_type: 'conveyor',
-              topics: ['lab/conveyor/speed', 'lab/conveyor/position'],
-              sample_data: { speed: 1.5, position: 45, status: 'transporting' },
-              message_count: 28,
-              first_seen: new Date().toISOString(),
-              last_seen: new Date().toISOString()
-            }
-          ];
-          setDiscoveredNodesState(mockNodes);
+          setDiscoveredNodesState([]);
         }
         
         setIsDiscovering(false);

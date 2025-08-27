@@ -44,6 +44,11 @@ pids
 *.seed
 *.pid.lock
 
+# Backend data directories (user data should not be in version control)
+backend/data/messages/
+backend/data/sessions/
+backend/data/projects/
+
 # Coverage directory used by tools like istanbul
 coverage/
 

@@ -83,7 +83,13 @@ class MQTTDiscovery:
     def on_connect(self, client, userdata, flags, rc):
         if rc == 0:
             logger.info(f"Connected to MQTT broker for discovery")
-            client.subscribe(self.config.topic)
+            # Validate topic before subscribing
+            topic = self.config.topic.strip() if self.config.topic else ""
+            if not topic or topic.startswith('/') or topic.endswith('/'):
+                logger.error(f"Invalid topic pattern: '{topic}'. Using default 'cell/#'")
+                topic = "cell/#"
+            client.subscribe(topic)
+            logger.info(f"Subscribed to topic: {topic}")
         else:
             logger.error(f"Failed to connect to MQTT broker: {rc}")
     
@@ -107,9 +113,14 @@ class MQTTDiscovery:
                         'last_seen': datetime.now().isoformat(),
                         'sample_data': payload
                     }
+                    logger.info(f"Discovered: {equipment_id} / {sensor_type} on topic {topic}")
+            else:
+                logger.warning("AdaptiveSchemaLearner not available for discovery")
             
         except Exception as e:
             logger.error(f"Error processing discovery message: {e}")
+    
+
     
     def start(self):
         try:
@@ -160,18 +171,10 @@ class MQTTDiscovery:
             group['last_seen'] = max(group['last_seen'], data['last_seen'])
             group['first_seen'] = min(group['first_seen'], data['last_seen'])
             
-            # Use the equipment type from the schema learner's inference
-            # This could be inferred from the equipment_id pattern
-            if 'furnace' in equipment_id.lower():
-                group['equipment_type'] = 'furnace'
-            elif 'melter' in equipment_id.lower():
-                group['equipment_type'] = 'melter'
-            elif 'anvil' in equipment_id.lower():
-                group['equipment_type'] = 'anvil'
-            elif 'conveyor' in equipment_id.lower():
-                group['equipment_type'] = 'conveyor'
-            else:
-                group['equipment_type'] = data['sensor_type']
+            # Dynamically infer equipment type from equipment_id
+            # Extract the base name from equipment_id (e.g., "cell_1" -> "cell", "pump_A" -> "pump")
+            equipment_base = equipment_id.split('_')[0].lower() if '_' in equipment_id else equipment_id.lower()
+            group['equipment_type'] = equipment_base
         
         # Convert to DiscoveredNode objects
         nodes = []
@@ -203,7 +206,13 @@ class MQTTMonitoring:
     def on_connect(self, client, userdata, flags, rc):
         if rc == 0:
             logger.info(f"Connected to MQTT broker for monitoring")
-            client.subscribe(self.config.topic)
+            # Validate topic before subscribing
+            topic = self.config.topic.strip() if self.config.topic else ""
+            if not topic or topic.startswith('/') or topic.endswith('/'):
+                logger.error(f"Invalid topic pattern: '{topic}'. Using default 'cell/#'")
+                topic = "cell/#"
+            client.subscribe(topic)
+            logger.info(f"Subscribed to topic: {topic}")
         else:
             logger.error(f"Failed to connect to MQTT broker: {rc}")
     
@@ -218,13 +227,33 @@ class MQTTMonitoring:
                 equipment_id = analyzed.get('equipment_id', 'unknown')
                 sensor_type = analyzed.get('sensor_type', 'unknown')
                 value = analyzed.get('value')
-                status = analyzed.get('status', 'unknown')
-                
-                if equipment_id != 'unknown':
-                    # Send data to all connected WebSocket clients
-                    message = {
-                        'type': 'mqtt_data',
-                        'data': {
+                status = analyzed.get('status', 'active')
+            else:
+                logger.warning("AdaptiveSchemaLearner not available for monitoring")
+                equipment_id = 'unknown'
+                sensor_type = 'unknown'
+                value = payload.get('value', 0)
+                status = payload.get('status', 'active')
+            
+            if equipment_id != 'unknown':
+                # Send data to all connected WebSocket clients
+                message = {
+                    'type': 'mqtt_data',
+                    'data': {
+                        'equipment_id': equipment_id,
+                        'sensor_type': sensor_type,
+                        'value': value,
+                        'status': status,
+                        'timestamp': datetime.now().isoformat(),
+                        'topic': topic,
+                        'raw_payload': payload
+                    }
+                }
+                    
+                # Store message in database if session is active
+                if self.current_session_id and self.project_id:
+                    try:
+                        db.store_message(self.project_id, self.current_session_id, {
                             'equipment_id': equipment_id,
                             'sensor_type': sensor_type,
                             'value': value,
@@ -232,30 +261,18 @@ class MQTTMonitoring:
                             'timestamp': datetime.now().isoformat(),
                             'topic': topic,
                             'raw_payload': payload
-                        }
-                    }
-                    
-                    # Store message in database if session is active
-                    if self.current_session_id and self.project_id:
-                        try:
-                            db.store_message(self.project_id, self.current_session_id, {
-                                'equipment_id': equipment_id,
-                                'sensor_type': sensor_type,
-                                'value': value,
-                                'status': status,
-                                'timestamp': datetime.now().isoformat(),
-                                'topic': topic,
-                                'raw_payload': payload
-                            })
-                        except Exception as e:
-                            logger.error(f"Failed to store message in database: {e}")
-                    
-                    # Send to all connected WebSocket clients - use thread-safe approach
-                    if main_loop and not main_loop.is_closed():
-                        asyncio.run_coroutine_threadsafe(broadcast_to_websockets(message), main_loop)
+                        })
+                    except Exception as e:
+                        logger.error(f"Failed to store message in database: {e}")
+                
+                # Send to all connected WebSocket clients - use thread-safe approach
+                if main_loop and not main_loop.is_closed():
+                    asyncio.run_coroutine_threadsafe(broadcast_to_websockets(message), main_loop)
             
         except Exception as e:
             logger.error(f"Error processing monitoring message: {e}")
+    
+
     
     def start(self):
         try:
@@ -378,13 +395,25 @@ async def get_discovery_status():
 @app.post("/api/mqtt/discovery/stop")
 async def stop_mqtt_discovery():
     """Stop MQTT discovery"""
-    global current_discovery
+    global current_discovery, discovered_nodes
     
     if current_discovery:
         current_discovery.stop()
         current_discovery = None
     
+    # Clear the discovered nodes cache
+    discovered_nodes = []
+    
     return {"status": "success", "message": "MQTT discovery stopped"}
+
+@app.post("/api/mqtt/discovery/clear")
+async def clear_discovered_nodes():
+    """Clear the discovered nodes cache"""
+    global discovered_nodes
+    
+    discovered_nodes = []
+    
+    return {"status": "success", "message": "Discovered nodes cache cleared"}
 
 # WebSocket endpoint
 @app.websocket("/ws")
