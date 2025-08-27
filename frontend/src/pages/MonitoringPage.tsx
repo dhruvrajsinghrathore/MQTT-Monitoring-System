@@ -32,15 +32,27 @@ const MonitoringPage: React.FC = () => {
   const project: Project | null = (location.state as any)?.project || contextProject;
   
   const [nodes, setNodes, onNodesChange] = useNodesState(project?.graph_layout?.nodes || []);
-  const [edges, , onEdgesChange] = useEdgesState(project?.graph_layout?.edges || []);
+  const [edges, setEdges, onEdgesChange] = useEdgesState(project?.graph_layout?.edges || []);
   const [isMonitoring, setIsMonitoring] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected' | 'error'>('disconnected');
-  const [liveData, setLiveData] = useState<{[equipmentId: string]: {[sensorType: string]: SensorReading & {status: string}}}>({});
+    // Note: Live data is now managed by backend and sent as complete graph updates
   const [isTestingConnection, setIsTestingConnection] = useState(false);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [messageCount, setMessageCount] = useState(0);
-  
+
   const websocketRef = useRef<WebSocket | null>(null);
+
+  // Note: Nodes are now updated directly via WebSocket graph_update messages from backend
+
+  // Handle node clicks for navigation to equipment detail
+  const handleNodeClick = (event: React.MouseEvent, node: any) => {
+    navigate(`/equipment/${node.data.equipment_id}`, {
+      state: {
+        equipment: node.data,
+        project: project
+      }
+    });
+  };
 
   const getUnitForSensorType = (sensorType: string): string => {
     // Common unit patterns that can be extracted from field names
@@ -124,6 +136,14 @@ const MonitoringPage: React.FC = () => {
     }
   }, [project]);
 
+  // Auto-start monitoring when coming from editor
+  useEffect(() => {
+    if (project && connectionStatus === 'connected' && !isMonitoring) {
+      // Auto-start monitoring after connection is established
+      setIsMonitoring(true);
+    }
+  }, [project, connectionStatus]);
+
   // Handle monitoring start/stop
   useEffect(() => {
     if (isMonitoring && connectionStatus === 'connected' && !websocketRef.current) {
@@ -142,7 +162,8 @@ const MonitoringPage: React.FC = () => {
           // Send MQTT configuration to start monitoring
           const message: any = {
             type: 'start_monitoring',
-            config: project?.mqtt_config
+            config: project?.mqtt_config,
+            project: project // Send the complete project data
           };
           
           if (currentSessionId && project) {
@@ -173,43 +194,31 @@ const MonitoringPage: React.FC = () => {
           try {
             const message = JSON.parse(event.data);
             
-            if (message.type === 'mqtt_data') {
-              console.log('📡 Received MQTT data:', message.data);
+            if (message.type === 'graph_update') {
+              console.log('📊 Received graph update:', message.data);
               
               // Track message count for UI
               if (currentSessionId) {
                 setMessageCount(prev => prev + 1);
               }
               
-              // Extract cell ID and field from topic (cell/1/temperature -> equipment_id: "cell_1", sensor_type: "temperature")
-              const topic = message.data.topic || '';
-              const topicParts = topic.split('/');
-              
-              if (topicParts.length >= 3 && topicParts[0] === 'cell') {
-                const cellId = topicParts[1];
-                const fieldName = topicParts[2];
-                const equipmentId = `cell_${cellId}`;
+              // Update nodes directly with the complete graph data from backend
+              if (message.data && message.data.nodes) {
+                setNodes(message.data.nodes.map((node: any) => ({
+                  ...node,
+                  type: 'custom' // Ensure custom node type
+                })));
                 
-                // Use the field name as sensor type and get unit from message or fallback
-                const sensorType = fieldName;
-                const unit = message.data.unit || getUnitForSensorType(sensorType);
-                
-                setLiveData(prev => ({
-                  ...prev,
-                  [equipmentId]: {
-                    ...prev[equipmentId],
-                    [sensorType]: {
-                      sensor_type: sensorType,
-                      value: message.data.value || 0,
-                      unit: unit,
-                      timestamp: message.data.timestamp,
-                      status: message.data.status || 'active'
-                    }
-                  }
-                }));
-              } else {
-                console.warn('⚠️ Received message with unexpected topic format:', topic);
+                if (message.data.edges) {
+                  setEdges(message.data.edges);
+                }
               }
+            } else if (message.type === 'monitoring_started') {
+              console.log('✅ MQTT monitoring started successfully');
+              setConnectionStatus('connected');
+            } else if (message.type === 'monitoring_stopped') {
+              console.log('🛑 MQTT monitoring stopped');
+              setConnectionStatus('disconnected');
             }
           } catch (error) {
             console.error('❌ Error parsing WebSocket message:', error);
@@ -240,7 +249,6 @@ const MonitoringPage: React.FC = () => {
         websocketRef.current = null;
       }
       setConnectionStatus('disconnected');
-      setLiveData({});
       setMessageCount(0);
     }
   }, [isMonitoring]);
@@ -310,7 +318,7 @@ const MonitoringPage: React.FC = () => {
           <div className="flex justify-between items-center py-4">
             <div className="flex items-center space-x-4">
               <button
-                onClick={() => navigate('/projects')}
+                onClick={() => navigate('/')}
                 className="flex items-center text-gray-600 hover:text-gray-900"
               >
                 <ArrowLeft className="w-5 h-5 mr-2" />
@@ -442,63 +450,21 @@ const MonitoringPage: React.FC = () => {
           </div>
         ) : (
           <div className="space-y-6">
-            {/* Live Data Grid */}
-            {Object.keys(liveData).length > 0 && (
-            <div className="bg-white rounded-lg shadow p-6">
-              <h3 className="text-lg font-medium text-gray-900 mb-4">Live Data</h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {Object.entries(liveData).map(([equipmentId, sensors]) => (
-                  <div key={equipmentId} className="border rounded-lg p-4">
-                    <h4 className="font-medium text-gray-900 mb-3 capitalize">
-                      {equipmentId.replace('_', ' ')}
-                    </h4>
-                    <div className="space-y-2">
-                      {Object.entries(sensors).map(([sensorType, data]) => (
-                        <div key={sensorType} className="flex justify-between items-center">
-                          <span className="text-sm text-gray-600 capitalize">
-                            {sensorType.replace(/_/g, ' ')}:
-                          </span>
-                          <div className="text-right">
-                            <span className="font-mono text-sm">
-                              {typeof data.value === 'object' 
-                                ? JSON.stringify(data.value)
-                                : `${data.value} ${data.unit}`
-                              }
-                            </span>
-                            <div className={`text-xs px-2 py-1 rounded-full inline-block ml-2 ${
-                              data.status === 'active' ? 'bg-green-100 text-green-800' :
-                              data.status === 'warning' ? 'bg-yellow-100 text-yellow-800' :
-                              data.status === 'error' ? 'bg-red-100 text-red-800' :
-                              'bg-gray-100 text-gray-800'
-                            }`}>
-                              {data.status}
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-            )}
+
 
             {/* React Flow Visualization */}
             {project.graph_layout && (
-              <div className="bg-white rounded-lg shadow" style={{ height: '600px' }}>
+              <div className="bg-white rounded-lg shadow" style={{ height: 'calc(100vh - 200px)' }}>
                 <ReactFlow
-                  nodes={nodes.map(node => ({
-                    ...node,
-                    data: {
-                      ...node.data,
-                      sensorData: liveData[node.data.equipment_id] || {}
-                    }
-                  }))}
+                  nodes={nodes}
                   edges={edges}
                   onNodesChange={onNodesChange}
                   onEdgesChange={onEdgesChange}
                   nodeTypes={nodeTypes}
+                  onNodeClick={handleNodeClick}
                   fitView
+                  fitViewOptions={{ padding: 0.2 }}
+                  className="bg-gray-50"
                 >
                   <Controls />
                   <MiniMap />
