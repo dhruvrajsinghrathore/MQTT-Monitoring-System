@@ -114,16 +114,7 @@ const CustomNode: React.FC<NodeProps<CustomNodeData>> = ({ data }) => {
     ? formatDistanceToNow(new Date(data.last_updated), { addSuffix: true })
     : 'Never';
 
-  const handleNodeClick = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    // Navigate to equipment detail page
-    navigate(`/equipment/${data.equipment_id}`, { 
-      state: { 
-        equipment: data,
-        project: project // Pass the full project context
-      } 
-    });
-  };
+
 
   return (
     <div className="relative">
@@ -141,7 +132,6 @@ const CustomNode: React.FC<NodeProps<CustomNodeData>> = ({ data }) => {
           transform transition-all duration-300 hover:scale-105 hover:shadow-xl
           cursor-pointer relative z-10
         `}
-        onClick={handleNodeClick}
       >
         {/* Header */}
         <div className="flex items-center gap-3 mb-3">

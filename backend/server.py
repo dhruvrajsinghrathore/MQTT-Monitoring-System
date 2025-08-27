@@ -27,6 +27,96 @@ except ImportError as e:
     print(f"Warning: Could not import AdaptiveSchemaLearner: {e}")
     AdaptiveSchemaLearner = None
 
+# Add this after the imports, before the FastAPI app definition
+
+class GraphDataManager:
+    """Manages graph data and builds complete node structures with sensor data"""
+    
+    def __init__(self):
+        self.nodes_data = {}  # {equipment_id: node_data}
+        self.sensor_data = {}  # {equipment_id: {sensor_type: sensor_reading}}
+        self.project = None
+        
+    def set_project(self, project):
+        """Set the current project and initialize nodes from project data"""
+        self.project = project
+        self.nodes_data = {}
+        self.sensor_data = {}
+        
+        if project and project.get('graph_layout', {}).get('nodes'):
+            for node in project['graph_layout']['nodes']:
+                equipment_id = node['data']['equipment_id']
+                self.nodes_data[equipment_id] = {
+                    'id': node['id'],
+                    'type': 'custom',
+                    'position': node['position'],
+                    'data': {
+                        **node['data'],
+                        'sensors': [],
+                        'status': 'idle',
+                        'last_updated': None
+                    }
+                }
+                self.sensor_data[equipment_id] = {}
+    
+    def update_sensor_data(self, equipment_id: str, sensor_type: str, sensor_reading: dict):
+        """Update sensor data for a specific equipment and sensor type"""
+        # Ensure equipment exists in our data
+        if equipment_id not in self.sensor_data:
+            # Create a new node if it doesn't exist
+            self.nodes_data[equipment_id] = {
+                'id': f"{equipment_id}_{int(time.time())}",
+                'type': 'custom',
+                'position': {'x': len(self.nodes_data) * 200, 'y': len(self.nodes_data) * 100},
+                'data': {
+                    'equipment_id': equipment_id,
+                    'equipment_type': equipment_id.split('_')[0] if '_' in equipment_id else 'unknown',
+                    'label': equipment_id,
+                    'sensors': [],
+                    'status': 'idle',
+                    'last_updated': None
+                }
+            }
+            self.sensor_data[equipment_id] = {}
+        
+        # Update sensor data
+        self.sensor_data[equipment_id][sensor_type] = sensor_reading
+        
+        # Rebuild sensors array for the node
+        sensors = []
+        for stype, sreading in self.sensor_data[equipment_id].items():
+            sensors.append({
+                'sensor_type': stype,
+                'value': sreading.get('value', 0),
+                'unit': sreading.get('unit', ''),
+                'timestamp': sreading.get('timestamp'),
+                'status': sreading.get('status', 'active')
+            })
+        
+        # Update node data
+        self.nodes_data[equipment_id]['data']['sensors'] = sensors
+        self.nodes_data[equipment_id]['data']['status'] = 'active' if sensors else 'idle'
+        self.nodes_data[equipment_id]['data']['last_updated'] = datetime.now().isoformat()
+    
+    def get_graph_data(self):
+        """Get complete graph data with all nodes and their sensor data"""
+        nodes = list(self.nodes_data.values())
+        edges = []
+        
+        # Get edges from project if available
+        if self.project and self.project.get('graph_layout', {}).get('edges'):
+            edges = self.project['graph_layout']['edges']
+        
+        return {
+            'nodes': nodes,
+            'edges': edges,
+            'last_updated': datetime.now().isoformat(),
+            'first_message': len(nodes) > 0
+        }
+
+# Create global graph data manager
+graph_manager = GraphDataManager()
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -236,18 +326,31 @@ class MQTTMonitoring:
                 status = payload.get('status', 'active')
             
             if equipment_id != 'unknown':
-                # Send data to all connected WebSocket clients
+                # Get unit from payload or schema learner
+                unit = payload.get('unit', '')
+                if not unit and 'field' in payload:
+                    # Extract unit from field name (e.g., "temperature_C" -> "C")
+                    field = payload.get('field', '')
+                    if '_' in field:
+                        unit = field.split('_')[-1]
+                
+                # Update graph manager with sensor data
+                sensor_reading = {
+                    'value': value,
+                    'unit': unit,
+                    'status': status,
+                    'timestamp': datetime.now().isoformat(),
+                    'topic': topic,
+                    'raw_payload': payload
+                }
+                
+                graph_manager.update_sensor_data(equipment_id, sensor_type, sensor_reading)
+                
+                # Get complete graph data and send to all connected WebSocket clients
+                graph_data = graph_manager.get_graph_data()
                 message = {
-                    'type': 'mqtt_data',
-                    'data': {
-                        'equipment_id': equipment_id,
-                        'sensor_type': sensor_type,
-                        'value': value,
-                        'status': status,
-                        'timestamp': datetime.now().isoformat(),
-                        'topic': topic,
-                        'raw_payload': payload
-                    }
+                    'type': 'graph_update',
+                    'data': graph_data
                 }
                     
                 # Store message in database if session is active
@@ -433,9 +536,15 @@ async def websocket_endpoint(websocket: WebSocket):
                 global current_monitoring
                 config_data = message.get('config')
                 session_info = message.get('session_info')
+                project_data = message.get('project')
                 
                 if config_data:
                     config = MQTTConfig(**config_data)
+                    
+                    # Initialize graph manager with project data
+                    if project_data:
+                        graph_manager.set_project(project_data)
+                        logger.info(f"📊 Initialized graph manager with project: {project_data.get('name', 'Unknown')}")
                     
                     # Stop existing monitoring
                     if current_monitoring:
