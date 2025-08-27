@@ -10,7 +10,12 @@ import {
   Activity,
   Beaker,
   Clock,
-  Cpu
+  Cpu,
+  Settings,
+  Box,
+  Package,
+  Cog,
+  Server
 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 
@@ -59,13 +64,22 @@ const getSensorIcon = (sensorType: string) => {
 };
 
 const getEquipmentIcon = (equipmentType: string) => {
-  const icons = {
-    furnace: <Thermometer className="w-5 h-5" />,
-    melter: <Beaker className="w-5 h-5" />,
-    anvil: <Zap className="w-5 h-5" />,
-    conveyor: <Activity className="w-5 h-5" />,
+  // Dynamic icon mapping based on equipment type
+  const iconMap: { [key: string]: React.ReactNode } = {
+    cell: <Activity className="w-5 h-5" />,
+    sensor: <Cpu className="w-5 h-5" />,
+    pump: <Zap className="w-5 h-5" />,
+    valve: <Settings className="w-5 h-5" />,
+    monitor: <Activity className="w-5 h-5" />,
+    controller: <Cpu className="w-5 h-5" />,
+    device: <Box className="w-5 h-5" />,
+    equipment: <Package className="w-5 h-5" />,
+    machine: <Cog className="w-5 h-5" />,
+    system: <Server className="w-5 h-5" />,
   };
-  return icons[equipmentType as keyof typeof icons] || <Cpu className="w-5 h-5" />;
+  
+  // Try exact match first, then fallback to generic icons
+  return iconMap[equipmentType.toLowerCase()] || <Package className="w-5 h-5" />;
 };
 
 const formatValue = (value: number | string | object, unit: string) => {
