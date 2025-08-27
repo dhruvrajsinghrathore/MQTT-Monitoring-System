@@ -15,7 +15,7 @@ import {
   ReactFlowInstance,
   BackgroundVariant
 } from 'reactflow';
-import { Save, Play, ArrowLeft, Plus } from 'lucide-react';
+import { Save, Play, ArrowLeft, Plus, Grid } from 'lucide-react';
 import { useProject } from '../contexts/ProjectContext';
 import { DiscoveredNode, Project } from '../types';
 import { ProjectService } from '../services/ProjectService';
@@ -123,6 +123,85 @@ const GraphEditorPage: React.FC = () => {
     }
   };
 
+  const addAllNodes = () => {
+    if (!project || !project.discovered_nodes.length) return;
+    
+    // Calculate grid dimensions for spacing
+    const nodeCount = project.discovered_nodes.length;
+    const gridSize = Math.ceil(Math.sqrt(nodeCount));
+    const nodeSpacing = 250; // pixels between nodes
+    
+    const newNodes = project.discovered_nodes.map((discoveredNode, index) => {
+      // Calculate grid position
+      const row = Math.floor(index / gridSize);
+      const col = index % gridSize;
+      
+      return {
+        id: `${discoveredNode.equipment_id}_${Date.now()}_${index}`,
+        type: 'default',
+        position: { 
+          x: col * nodeSpacing + 100, 
+          y: row * nodeSpacing + 100 
+        },
+        data: {
+          label: discoveredNode.equipment_id,
+          equipment_id: discoveredNode.equipment_id,
+          equipment_type: discoveredNode.equipment_type,
+          sensors: [],
+          status: 'idle',
+          last_updated: new Date().toISOString()
+        }
+      };
+    });
+    
+    // Add new nodes to existing ones (avoiding duplicates by equipment_id)
+    setNodes((currentNodes) => {
+      const existingEquipmentIds = new Set(currentNodes.map(node => node.data.equipment_id));
+      const nodesToAdd = newNodes.filter(node => !existingEquipmentIds.has(node.data.equipment_id));
+      return [...currentNodes, ...nodesToAdd];
+    });
+    
+    // Fit view to show all nodes
+    setTimeout(() => {
+      if (reactFlowInstance) {
+        reactFlowInstance.fitView({ padding: 0.1 });
+      }
+    }, 100);
+  };
+
+  const arrangeInGrid = () => {
+    if (!nodes.length) return;
+    
+    const nodeCount = nodes.length;
+    // Calculate grid dimensions: for n nodes, use ceil(sqrt(n)) columns
+    // This creates a nearly square grid (e.g., 9 nodes = 3x3, 10 nodes = 4x3)
+    const gridCols = Math.ceil(Math.sqrt(nodeCount));
+    const gridRows = Math.ceil(nodeCount / gridCols);
+    const nodeSpacing = 250; // pixels between nodes
+    
+    const updatedNodes = nodes.map((node, index) => {
+      const row = Math.floor(index / gridCols);
+      const col = index % gridCols;
+      
+      return {
+        ...node,
+        position: {
+          x: col * nodeSpacing + 100,
+          y: row * nodeSpacing + 100
+        }
+      };
+    });
+    
+    setNodes(updatedNodes);
+    
+    // Fit view to show all nodes
+    setTimeout(() => {
+      if (reactFlowInstance) {
+        reactFlowInstance.fitView({ padding: 0.1 });
+      }
+    }, 100);
+  };
+
   if (!project) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
@@ -164,9 +243,20 @@ const GraphEditorPage: React.FC = () => {
 
         {/* Available Nodes */}
         <div className="flex-1 p-4 overflow-y-auto">
-          <h2 className="text-sm font-medium text-gray-700 mb-3">Available Nodes</h2>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-medium text-gray-700">Available Nodes</h2>
+            <span className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded">
+              {project.discovered_nodes.length} discovered
+            </span>
+          </div>
           <div className="space-y-2">
-            {project.discovered_nodes.map((node: DiscoveredNode) => (
+            {project.discovered_nodes.length === 0 ? (
+              <div className="text-center py-8">
+                <p className="text-sm text-gray-500 mb-2">No nodes discovered</p>
+                <p className="text-xs text-gray-400">Run discovery in project settings to find equipment</p>
+              </div>
+            ) : (
+              project.discovered_nodes.map((node: DiscoveredNode) => (
               <div
                 key={node.id}
                 className="p-3 bg-gray-50 rounded-lg border border-gray-200 cursor-move hover:bg-gray-100 transition-colors"
@@ -187,7 +277,8 @@ const GraphEditorPage: React.FC = () => {
                   {node.topics.length > 2 && '...'}
                 </div>
               </div>
-            ))}
+              ))
+            )}
           </div>
         </div>
 
@@ -208,6 +299,24 @@ const GraphEditorPage: React.FC = () => {
             <Play className="w-4 h-4 mr-2" />
             Start Monitoring
           </button>
+                     <button
+             onClick={addAllNodes}
+             className="w-full minimal-button flex items-center justify-center"
+             disabled={project?.discovered_nodes.length === 0}
+             title="Add all discovered nodes to the graph at once"
+           >
+             <Plus className="w-4 h-4 mr-2" />
+             Add All Nodes ({project?.discovered_nodes.length || 0})
+           </button>
+           <button
+             onClick={arrangeInGrid}
+             className="w-full minimal-button flex items-center justify-center"
+             disabled={nodes.length === 0}
+             title="Arrange all nodes in an equi-spaced grid layout"
+           >
+             <Grid className="w-4 h-4 mr-2" />
+             Arrange in Grid ({nodes.length} nodes)
+           </button>
         </div>
       </div>
 
