@@ -22,7 +22,7 @@ A minimal, user-friendly MQTT workflow editor that allows you to:
 
 1. Install dependencies:
 ```bash
-cd GUI
+cd frontend
 npm install
 ```
 
@@ -37,7 +37,7 @@ The frontend will be available at `http://localhost:3001`
 
 1. Install Python dependencies:
 ```bash
-cd GUI/backend
+cd backend
 pip install -r requirements.txt
 ```
 
