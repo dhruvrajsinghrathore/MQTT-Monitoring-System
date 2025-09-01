@@ -36,12 +36,17 @@ class GraphDataManager:
         self.nodes_data = {}  # {equipment_id: node_data}
         self.sensor_data = {}  # {equipment_id: {sensor_type: sensor_reading}}
         self.project = None
+        self.last_update_time = 0  # Throttling
+        self.update_interval = 0.5  # Send updates max every 500ms
         
     def set_project(self, project):
         """Set the current project and initialize nodes from project data"""
         self.project = project
-        self.nodes_data = {}
-        self.sensor_data = {}
+        # Only clear if we don't have any nodes yet, preserve dynamic nodes
+        if not self.nodes_data:
+            self.nodes_data = {}
+        if not self.sensor_data:
+            self.sensor_data = {}
         
         if project and project.get('graph_layout', {}).get('nodes'):
             for node in project['graph_layout']['nodes']:
@@ -65,7 +70,7 @@ class GraphDataManager:
         if equipment_id not in self.sensor_data:
             # Create a new node if it doesn't exist
             self.nodes_data[equipment_id] = {
-                'id': f"{equipment_id}_{int(time.time())}",
+                'id': equipment_id,
                 'type': 'custom',
                 'position': {'x': len(self.nodes_data) * 200, 'y': len(self.nodes_data) * 100},
                 'data': {
@@ -97,6 +102,14 @@ class GraphDataManager:
         self.nodes_data[equipment_id]['data']['sensors'] = sensors
         self.nodes_data[equipment_id]['data']['status'] = 'active' if sensors else 'idle'
         self.nodes_data[equipment_id]['data']['last_updated'] = datetime.now().isoformat()
+    
+    def should_send_update(self):
+        """Check if enough time has passed to send an update"""
+        current_time = time.time()
+        if current_time - self.last_update_time >= self.update_interval:
+            self.last_update_time = current_time
+            return True
+        return False
     
     def get_graph_data(self):
         """Get complete graph data with all nodes and their sensor data"""
@@ -346,12 +359,17 @@ class MQTTMonitoring:
                 
                 graph_manager.update_sensor_data(equipment_id, sensor_type, sensor_reading)
                 
-                # Get complete graph data and send to all connected WebSocket clients
-                graph_data = graph_manager.get_graph_data()
-                message = {
-                    'type': 'graph_update',
-                    'data': graph_data
-                }
+                # Only send graph updates if enough time has passed (throttling)
+                if graph_manager.should_send_update():
+                    graph_data = graph_manager.get_graph_data()
+                    message = {
+                        'type': 'graph_update',
+                        'data': graph_data
+                    }
+                    
+                    # Send to all connected WebSocket clients - use thread-safe approach
+                    if main_loop and not main_loop.is_closed():
+                        asyncio.run_coroutine_threadsafe(broadcast_to_websockets(message), main_loop)
                     
                 # Store message in database if session is active
                 if self.current_session_id and self.project_id:
@@ -368,6 +386,11 @@ class MQTTMonitoring:
                     except Exception as e:
                         logger.error(f"Failed to store message in database: {e}")
                 
+                
+                # Send to all connected WebSocket clients - use thread-safe approach
+                if main_loop and not main_loop.is_closed():
+                    asyncio.run_coroutine_threadsafe(broadcast_to_websockets(message), main_loop)
+
                 # Send to all connected WebSocket clients - use thread-safe approach
                 if main_loop and not main_loop.is_closed():
                     asyncio.run_coroutine_threadsafe(broadcast_to_websockets(message), main_loop)

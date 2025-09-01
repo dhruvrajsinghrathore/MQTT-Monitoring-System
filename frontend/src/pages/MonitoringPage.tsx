@@ -31,8 +31,9 @@ const MonitoringPage: React.FC = () => {
   // Get project from location state or context
   const project: Project | null = (location.state as any)?.project || contextProject;
   
-  const [nodes, setNodes, onNodesChange] = useNodesState(project?.graph_layout?.nodes || []);
-  const [edges, setEdges, onEdgesChange] = useEdgesState(project?.graph_layout?.edges || []);
+  // Only initialize nodes/edges from project once, do not reset on project change
+  const [nodes, setNodes, onNodesChange] = useNodesState(project?.graph_layout?.nodes ? project.graph_layout.nodes.map((node: any) => ({ ...node, type: 'custom' })) : []);
+  const [edges, setEdges, onEdgesChange] = useEdgesState(project?.graph_layout?.edges ? project.graph_layout.edges : []);
   const [isMonitoring, setIsMonitoring] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected' | 'error'>('disconnected');
     // Note: Live data is now managed by backend and sent as complete graph updates
@@ -144,28 +145,26 @@ const MonitoringPage: React.FC = () => {
     }
   }, [project, connectionStatus]);
 
-  // Handle monitoring start/stop
+  // Handle monitoring start/stop and WebSocket connection
   useEffect(() => {
-    if (isMonitoring && connectionStatus === 'connected' && !websocketRef.current) {
-      // Connect to backend WebSocket for live data
+    if (isMonitoring && !websocketRef.current) {
       setConnectionStatus('connecting');
-      
       try {
         const wsUrl = WEBSOCKET_URL.replace('http', 'ws') + '/ws';
         const ws = new WebSocket(wsUrl);
-        
+
         ws.onopen = () => {
           console.log('✅ WebSocket connected');
           setConnectionStatus('connected');
           websocketRef.current = ws;
-          
+
           // Send MQTT configuration to start monitoring
           const message: any = {
             type: 'start_monitoring',
             config: project?.mqtt_config,
             project: project // Send the complete project data
           };
-          
+
           if (currentSessionId && project) {
             message.session_info = {
               session_id: currentSessionId,
@@ -173,7 +172,7 @@ const MonitoringPage: React.FC = () => {
               project_name: project.name
             };
           }
-          
+
           ws.send(JSON.stringify(message));
           console.log('📡 Started MQTT monitoring with config:', project?.mqtt_config);
         };
@@ -193,26 +192,38 @@ const MonitoringPage: React.FC = () => {
         ws.onmessage = (event) => {
           try {
             const message = JSON.parse(event.data);
-            
+
             if (message.type === 'graph_update') {
               console.log('📊 Received graph update:', message.data);
-              
+              console.log('Nodes received:', message.data?.nodes);
+              console.log('Edges received:', message.data?.edges);
+
+              // Defensive check: ensure nodes is an array and each node has id
+              if (message.data && Array.isArray(message.data.nodes)) {
+                const validNodes = message.data.nodes.filter((node: any) => node && node.id);
+                if (validNodes.length !== message.data.nodes.length) {
+                  console.warn('Some nodes missing id or invalid:', message.data.nodes);
+                }
+                setNodes(validNodes.map((node: any) => ({
+                  ...node,
+                  type: 'custom'
+                })));
+              }
+
+              // Defensive check: ensure edges is an array and each edge has id/source/target
+              if (message.data && Array.isArray(message.data.edges)) {
+                const validEdges = message.data.edges.filter((edge: any) => edge && edge.id && edge.source && edge.target);
+                if (validEdges.length !== message.data.edges.length) {
+                  console.warn('Some edges missing id/source/target or invalid:', message.data.edges);
+                }
+                setEdges(validEdges);
+              }
+
               // Track message count for UI
               if (currentSessionId) {
                 setMessageCount(prev => prev + 1);
               }
               
-              // Update nodes directly with the complete graph data from backend
-              if (message.data && message.data.nodes) {
-                setNodes(message.data.nodes.map((node: any) => ({
-                  ...node,
-                  type: 'custom' // Ensure custom node type
-                })));
-                
-                if (message.data.edges) {
-                  setEdges(message.data.edges);
-                }
-              }
             } else if (message.type === 'monitoring_started') {
               console.log('✅ MQTT monitoring started successfully');
               setConnectionStatus('connected');
@@ -224,7 +235,7 @@ const MonitoringPage: React.FC = () => {
             console.error('❌ Error parsing WebSocket message:', error);
           }
         };
-        
+
       } catch (error) {
         console.error('❌ Failed to create WebSocket connection:', error);
         setConnectionStatus('error');
@@ -238,7 +249,7 @@ const MonitoringPage: React.FC = () => {
         websocketRef.current = null;
       }
     };
-  }, [isMonitoring]); // Only depend on isMonitoring to prevent reconnection loops
+  }, [isMonitoring, project, currentSessionId]); // Depend on isMonitoring, project, currentSessionId
 
   // Separate effect for stopping monitoring
   useEffect(() => {
@@ -254,12 +265,9 @@ const MonitoringPage: React.FC = () => {
   }, [isMonitoring]);
 
   const handleToggleMonitoring = () => {
-    if (connectionStatus === 'error') {
-      // Retry connection
-      testMQTTConnection();
-      return;
+    if (!isMonitoring) {
+      setConnectionStatus('connecting');
     }
-    
     setIsMonitoring(!isMonitoring);
   };
 
@@ -479,4 +487,4 @@ const MonitoringPage: React.FC = () => {
   );
 };
 
-export default MonitoringPage; 
+export default MonitoringPage;
