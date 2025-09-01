@@ -503,7 +503,7 @@ const EquipmentDetailPage: React.FC = () => {
                             activeDot={{ r: 5 }}
                             name={sensorType.replace('_', ' ')}
                             connectNulls
-                            // isAnimationActive={false} // Disable animation for real-time updates
+                            isAnimationActive={false} // Disable animation for real-time updates
                           />
                         ))}
                     </LineChart>
