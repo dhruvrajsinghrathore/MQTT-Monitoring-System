@@ -4,6 +4,7 @@ import { Plus, Star, Download, Upload, Trash2, Play, Edit, Calendar, Server, Lay
 import { ProjectService } from '../services/ProjectService';
 import { ProjectSummary } from '../types';
 import { formatDistanceToNow } from 'date-fns';
+import SensorFlowIcon from '../assets/SensorFlowIcon.png';
 
 const ProjectsPage: React.FC = () => {
   const navigate = useNavigate();
@@ -103,8 +104,15 @@ const ProjectsPage: React.FC = () => {
       <div className="max-w-7xl mx-auto px-4">
         {/* Header */}
         <div className="mb-8">
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">MQTT Workflow Projects</h1>
-          <p className="text-gray-600">Manage your saved workflow configurations and graphs</p>
+          <div className="flex items-center gap-1 mb-2">
+            <img 
+              src={SensorFlowIcon} 
+              alt="SensorFlow Icon" 
+              className="w-12 h-12"
+            />
+            <h1 className="text-4xl font-bold text-gray-900">SensorFlow</h1>
+          </div>
+          <p className="text-gray-600">Real-time sensor data and workflow visualization</p>
         </div>
 
         {/* Toolbar */}
@@ -162,7 +170,7 @@ const ProjectsPage: React.FC = () => {
                 {searchTerm ? 'No projects match your search.' : 'Create your first MQTT workflow project to get started.'}
               </p>
             </div>
-            {!searchTerm && (
+            {/* {!searchTerm && (
               <button
                 onClick={handleCreateProject}
                 className="minimal-button-primary"
@@ -170,7 +178,7 @@ const ProjectsPage: React.FC = () => {
                 <Plus className="w-4 h-4 mr-2" />
                 Create First Project
               </button>
-            )}
+            )} */}
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
