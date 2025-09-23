@@ -18,7 +18,7 @@ const CreateProjectPage: React.FC = () => {
     broker_port: 1883,
     username: '',
     password: '',
-    topic: 'cell/#',
+    topic: '#',  // Universal topic pattern - subscribes to everything by default
     discovery_duration: 30
   });
 

@@ -188,9 +188,13 @@ class MQTTDiscovery:
             logger.info(f"Connected to MQTT broker for discovery")
             # Validate topic before subscribing
             topic = self.config.topic.strip() if self.config.topic else ""
-            if not topic or topic.startswith('/') or topic.endswith('/'):
-                logger.error(f"Invalid topic pattern: '{topic}'. Using default 'cell/#'")
-                topic = "cell/#"
+            if not topic:
+                logger.error(f"No topic pattern provided. Using default '#' to subscribe to all topics")
+                topic = "#"
+            elif topic.startswith('/') or topic.endswith('/'):
+                # Clean up topic pattern
+                topic = topic.strip('/')
+                logger.warning(f"Cleaned topic pattern: '{topic}'")
             client.subscribe(topic)
             logger.info(f"Subscribed to topic: {topic}")
         else:
@@ -274,9 +278,14 @@ class MQTTDiscovery:
             group['last_seen'] = max(group['last_seen'], data['last_seen'])
             group['first_seen'] = min(group['first_seen'], data['last_seen'])
             
-            # Dynamically infer equipment type from equipment_id
-            # Extract the base name from equipment_id (e.g., "cell_1" -> "cell", "pump_A" -> "pump")
-            equipment_base = equipment_id.split('_')[0].lower() if '_' in equipment_id else equipment_id.lower()
+            # Dynamically infer equipment type from equipment_id or topic structure
+            if '_' in equipment_id:
+                # Extract the base name from equipment_id (e.g., "cell_1" -> "cell", "lab_furnace01" -> "lab")
+                equipment_base = equipment_id.split('_')[0].lower()
+            else:
+                # Use the root topic as equipment type for single-level equipment IDs
+                topic_parts = data['topic'].split('/')
+                equipment_base = topic_parts[0].lower() if topic_parts else equipment_id.lower()
             group['equipment_type'] = equipment_base
         
         # Convert to DiscoveredNode objects
@@ -311,9 +320,13 @@ class MQTTMonitoring:
             logger.info(f"Connected to MQTT broker for monitoring")
             # Validate topic before subscribing
             topic = self.config.topic.strip() if self.config.topic else ""
-            if not topic or topic.startswith('/') or topic.endswith('/'):
-                logger.error(f"Invalid topic pattern: '{topic}'. Using default 'cell/#'")
-                topic = "cell/#"
+            if not topic:
+                logger.error(f"No topic pattern provided. Using default '#' to subscribe to all topics")
+                topic = "#"
+            elif topic.startswith('/') or topic.endswith('/'):
+                # Clean up topic pattern
+                topic = topic.strip('/')
+                logger.warning(f"Cleaned topic pattern: '{topic}'")
             client.subscribe(topic)
             logger.info(f"Subscribed to topic: {topic}")
         else:

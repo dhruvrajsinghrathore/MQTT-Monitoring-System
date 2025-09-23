@@ -167,9 +167,16 @@ class AdaptiveSchemaLearner:
                                payload: Dict[str, Any]) -> str:
         """
         Intelligently determine what equipment/device this message represents.
+        Works with any hierarchical topic pattern: <name>/<equipment>/<attribute>
         """
-        # Priority 1: Look for numeric IDs in topic combined with type
         parts = topic_info['parts']
+        
+        # For 3-level hierarchical topics (name/equipment/attribute)
+        if len(parts) == 3:
+            # Use name_equipment format (e.g., "lab_furnace01", "cell_1", "pump_A")
+            return f"{parts[0]}_{parts[1]}"
+        
+        # Priority 1: Look for identifier patterns in topic hierarchy
         if len(parts) >= 2:
             # Check for patterns like: equipment_type/id, type/id/measurement
             for i in range(len(parts) - 1):
@@ -201,11 +208,13 @@ class AdaptiveSchemaLearner:
                              payload: Dict[str, Any]) -> str:
         """
         Intelligently determine what type of measurement/sensor this represents.
+        Works universally with any hierarchical topic pattern.
         """
-        # For cell/1/temperature pattern, always use the last part
         parts = topic_info['parts']
-        if len(parts) == 3 and parts[0] == 'cell':
-            return parts[2]  # Always use the measurement name
+        
+        # For 3-level hierarchical topics (name/equipment/attribute), use the last part as sensor type
+        if len(parts) == 3:
+            return parts[2]  # Always use the most specific part (attribute/measurement)
         
         # Priority 1: Last part of topic (most specific)
         leaf = topic_info['leaf']
@@ -278,18 +287,37 @@ class AdaptiveSchemaLearner:
         """
         metadata = {}
         
-        # Look for unit information
+        # Look for unit information (more comprehensive)
+        unit_indicators = ['unit', 'units', 'uom', 'dimension', 'scale']
         for key, value in payload.items():
-            if 'unit' in key.lower():
+            key_lower = key.lower()
+            if any(indicator in key_lower for indicator in unit_indicators):
                 metadata['unit'] = str(value)
                 break
         
-        # Look for min/max values
+        # Look for range information
+        range_indicators = {
+            'min': ['min', 'minimum', 'lower', 'low'],
+            'max': ['max', 'maximum', 'upper', 'high', 'limit']
+        }
+        
         for key, value in payload.items():
-            if 'min' in key.lower() and isinstance(value, (int, float)):
-                metadata['min_value'] = value
-            elif 'max' in key.lower() and isinstance(value, (int, float)):
-                metadata['max_value'] = value
+            key_lower = key.lower()
+            if isinstance(value, (int, float)):
+                # Check for min values
+                if any(indicator in key_lower for indicator in range_indicators['min']):
+                    metadata['min_value'] = value
+                # Check for max values
+                elif any(indicator in key_lower for indicator in range_indicators['max']):
+                    metadata['max_value'] = value
+        
+        # Extract sensor type information if available
+        sensor_type_indicators = ['sensor_type', 'type', 'kind', 'category', 'class']
+        for key, value in payload.items():
+            key_lower = key.lower()
+            if any(indicator in key_lower for indicator in sensor_type_indicators) and isinstance(value, str):
+                metadata['sensor_type'] = str(value)
+                break
         
         # Include any object fields as metadata
         metadata.update(payload_info['object_fields'])
@@ -383,29 +411,56 @@ class AdaptiveSchemaLearner:
         score = 0.5
         key_lower = key.lower()
         
-        # Boost for value-like field names
-        value_indicators = ['value', 'reading', 'measurement', 'level', 'amount', 'temperature', 'pressure']
+        # Boost for value-like field names (more comprehensive)
+        value_indicators = [
+            'value', 'reading', 'measurement', 'level', 'amount', 'data',
+            'temperature', 'pressure', 'humidity', 'voltage', 'current', 'power',
+            'speed', 'flow', 'rate', 'count', 'percent', 'ratio', 'index',
+            'concentration', 'density', 'weight', 'mass', 'force', 'torque',
+            'ph', 'dissolved', 'viability', 'impedance', 'confluence'
+        ]
         if any(indicator in key_lower for indicator in value_indicators):
-            score += 0.3
+            score += 0.4
         
-        # Boost for reasonable numeric ranges
+        # Boost for reasonable numeric ranges (expanded)
         if isinstance(value, (int, float)):
-            if -1000 <= value <= 10000:  # Reasonable sensor range
+            if -10000 <= value <= 100000:  # Expanded reasonable sensor range
                 score += 0.2
+            if 0 <= value <= 1000:  # Common sensor readings
+                score += 0.1
         
-        return score
+        # Penalize fields that are clearly not main values
+        exclude_indicators = ['id', 'time', 'stamp', 'date', 'version', 'count', 'index', 'key', 'hash']
+        if any(indicator in key_lower for indicator in exclude_indicators):
+            score -= 0.3
+        
+        return max(0.0, score)
 
     def _score_as_identifier(self, key: str, value: Any) -> float:
         """Score how likely this field is to be an identifier."""
         score = 0.3
         key_lower = key.lower()
         
-        id_indicators = ['id', 'device', 'equipment', 'node', 'unit']
+        # More comprehensive identifier indicators
+        id_indicators = [
+            'id', 'device', 'equipment', 'node', 'unit', 'sensor', 'machine',
+            'name', 'label', 'tag', 'serial', 'address', 'handle', 'ref',
+            'equipment_id', 'device_id', 'sensor_id', 'cell_id'
+        ]
         if any(indicator in key_lower for indicator in id_indicators):
-            score += 0.4
+            score += 0.5
         
-        if isinstance(value, str) and len(value) <= 20:
-            score += 0.2
+        # String characteristics for identifiers
+        if isinstance(value, str):
+            if len(value) <= 30 and value.replace('_', '').replace('-', '').isalnum():
+                score += 0.3
+            if any(char.isdigit() for char in value):  # IDs often contain numbers
+                score += 0.2
+        
+        # Numeric IDs
+        elif isinstance(value, (int, float)):
+            if isinstance(value, int) and 0 <= value <= 10000:  # Reasonable ID range
+                score += 0.2
         
         return score
 
