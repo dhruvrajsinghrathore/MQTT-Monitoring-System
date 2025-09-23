@@ -398,15 +398,6 @@ class MQTTMonitoring:
                         })
                     except Exception as e:
                         logger.error(f"Failed to store message in database: {e}")
-                
-                
-                # Send to all connected WebSocket clients - use thread-safe approach
-                if main_loop and not main_loop.is_closed():
-                    asyncio.run_coroutine_threadsafe(broadcast_to_websockets(message), main_loop)
-
-                # Send to all connected WebSocket clients - use thread-safe approach
-                if main_loop and not main_loop.is_closed():
-                    asyncio.run_coroutine_threadsafe(broadcast_to_websockets(message), main_loop)
             
         except Exception as e:
             logger.error(f"Error processing monitoring message: {e}")
