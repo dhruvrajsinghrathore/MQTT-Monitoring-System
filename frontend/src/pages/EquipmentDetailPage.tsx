@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import { ArrowLeft, Activity, Thermometer, Gauge, Zap, Navigation, Beaker, RefreshCw, Database } from 'lucide-react';
+import { ArrowLeft, Activity, Thermometer, Gauge, Zap, Navigation, Beaker, RefreshCw, Database, MessageCircle } from 'lucide-react';
 import {
   LineChart,
   Line,
@@ -13,6 +13,7 @@ import {
 } from 'recharts';
 import { WEBSOCKET_URL } from '../config/api';
 import { DatabaseService } from '../services/DatabaseService';
+import ChatBot from '../components/ChatBot';
 
 interface SensorDataPoint {
   timestamp: string;
@@ -45,6 +46,9 @@ const EquipmentDetailPage: React.FC = () => {
   const [selectedFeatures, setSelectedFeatures] = useState<Set<string>>(new Set());
   // Track all available features
   const [availableFeatures, setAvailableFeatures] = useState<string[]>([]);
+  
+  // Chatbot state
+  const [isChatbotOpen, setIsChatbotOpen] = useState(false);
   
   const equipment = (location.state as any)?.equipment;
   const project = (location.state as any)?.project;
@@ -333,8 +337,9 @@ const EquipmentDetailPage: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header */}
+    <div className="min-h-screen bg-gray-50 flex">
+      {/* Main Content */}
+      <div className={`flex-1 transition-all duration-300`}>
       <div className="bg-white border-b border-gray-200 px-6 py-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-4">
@@ -355,6 +360,19 @@ const EquipmentDetailPage: React.FC = () => {
           </div>
           
           <div className="flex items-center space-x-4">
+            {/* Chatbot Toggle Button */}
+            <button
+              onClick={() => setIsChatbotOpen(!isChatbotOpen)}
+              className={`p-2 rounded-lg transition-colors ${
+                isChatbotOpen 
+                  ? 'bg-blue-100 text-blue-600' 
+                  : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
+              }`}
+              title="Open MQTT Assistant"
+            >
+              <MessageCircle className="w-5 h-5" />
+            </button>
+            
             {/* Connection Status */}
             {/* Historical Data Status */}
             {historicalDataLoaded && availableSessions.length > 0 && (
@@ -527,6 +545,16 @@ const EquipmentDetailPage: React.FC = () => {
           </div>
         </div>
       </div>
+      </div>
+
+      {/* Chatbot */}
+      {isChatbotOpen && (
+        <ChatBot 
+          isOpen={isChatbotOpen} 
+          onClose={() => setIsChatbotOpen(false)}
+          context={`equipment "${equipment?.equipment_id || equipmentId}" detail view`}
+        />
+      )}
     </div>
   );
 };

@@ -756,6 +756,6 @@ async def shutdown_event():
 
 if __name__ == "__main__":
     import uvicorn
-    print("🚀 Starting MQTT GUI Backend Server (FastAPI) on http://localhost:8000")
-    print("📡 WebSocket will be available at ws://localhost:8000/ws")
-    uvicorn.run(app, host="0.0.0.0", port=8000) 
+    print("🚀 Starting MQTT GUI Backend Server (FastAPI) on http://localhost:8001")
+    print("📡 WebSocket will be available at ws://localhost:8001/ws")
+    uvicorn.run(app, host="0.0.0.0", port=8001) 

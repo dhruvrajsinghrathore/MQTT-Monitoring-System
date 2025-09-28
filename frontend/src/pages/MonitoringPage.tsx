@@ -10,11 +10,11 @@ import {
   BackgroundVariant
 } from 'reactflow';
 import CustomNode from '../components/CustomNode';
-import { ArrowLeft, Pause, Play, Settings, Activity } from 'lucide-react';
+import ChatBot from '../components/ChatBot';
+import { ArrowLeft, Pause, Play, Settings, Activity, MessageCircle } from 'lucide-react';
 import { useProject } from '../contexts/ProjectContext';
-import { Project, SensorReading } from '../types';
+import { Project } from '../types';
 import { WEBSOCKET_URL, getApiUrl, API_ENDPOINTS } from '../config/api';
-import { DatabaseService } from '../services/DatabaseService';
 
 import 'reactflow/dist/style.css';
 
@@ -43,60 +43,19 @@ const MonitoringPage: React.FC = () => {
 
   const websocketRef = useRef<WebSocket | null>(null);
 
+  // Chatbot state
+  const [isChatbotOpen, setIsChatbotOpen] = useState(false);
+
   // Note: Nodes are now updated directly via WebSocket graph_update messages from backend
 
   // Handle node clicks for navigation to equipment detail
-  const handleNodeClick = (event: React.MouseEvent, node: any) => {
+  const handleNodeClick = (_event: React.MouseEvent, node: any) => {
     navigate(`/equipment/${node.data.equipment_id}`, {
       state: {
         equipment: node.data,
         project: project
       }
     });
-  };
-
-  const getUnitForSensorType = (sensorType: string): string => {
-    // Common unit patterns that can be extracted from field names
-    const unitPatterns: {[key: string]: string} = {
-      // Direct unit extraction from field names
-      'kOhm': 'kOhm',
-      'percent': '%', 
-      'pct': '%',
-      'pH': 'pH',
-      'mM': 'mM',
-      'uL_min': 'µL/min',
-      'mbar': 'mbar',
-      'nM': 'nM',
-      'index': 'index',
-      'pg': 'pg',
-      'count': 'count',
-      'AU': 'AU',
-      'ratio': 'ratio',
-      
-      // Common sensor types
-      'temperature': '°C',
-      'pressure': 'mbar',
-      'force': 'N',
-      'flow_rate': 'µL/min',
-      'speed': 'm/s',
-      'position': 'mm',
-      'composition': '%',
-      'level': '%',
-      'vibration': 'Hz',
-      'voltage': 'V',
-      'current': 'A',
-      'power': 'W',
-      'frequency': 'Hz'
-    };
-    
-    // Try to extract unit from field name (e.g., "pressure_mbar" -> "mbar")
-    for (const [pattern, unit] of Object.entries(unitPatterns)) {
-      if (sensorType.toLowerCase().includes(pattern.toLowerCase())) {
-        return unit;
-      }
-    }
-    
-    return 'units'; // Fallback for unknown types
   };
 
 
@@ -319,8 +278,9 @@ const MonitoringPage: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen bg-gray-100">
-      {/* Header */}
+    <div className="min-h-screen bg-gray-100 flex">
+      {/* Main Content */}
+      <div className={`flex-1 transition-all duration-300`}>
       <div className="bg-white shadow-sm border-b">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center py-4">
@@ -344,6 +304,18 @@ const MonitoringPage: React.FC = () => {
             
             {/* Status and Controls */}
             <div className="flex items-center space-x-4">
+              {/* Chatbot Toggle Button */}
+              <button
+                onClick={() => setIsChatbotOpen(!isChatbotOpen)}
+                className={`p-2 rounded-lg transition-colors ${
+                  isChatbotOpen 
+                    ? 'bg-blue-100 text-blue-600' 
+                    : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
+                }`}
+                title="Open MQTT Assistant"
+              >
+                <MessageCircle className="w-5 h-5" />
+              </button>
               {/* Connection Status */}
               <div className="flex items-center space-x-2">
                 <div className={`w-3 h-3 rounded-full ${
@@ -483,6 +455,16 @@ const MonitoringPage: React.FC = () => {
           </div>
         )}
       </div>
+      </div>
+
+      {/* Chatbot */}
+      {isChatbotOpen && (
+        <ChatBot 
+          isOpen={isChatbotOpen} 
+          onClose={() => setIsChatbotOpen(false)}
+          context={`project "${project.name}" monitoring dashboard`}
+        />
+      )}
     </div>
   );
 };

@@ -15,10 +15,11 @@ import {
   ReactFlowInstance,
   BackgroundVariant
 } from 'reactflow';
-import { Save, Play, ArrowLeft, Plus, Grid } from 'lucide-react';
+import { Save, Play, ArrowLeft, Plus, Grid, RefreshCw } from 'lucide-react';
 import { useProject } from '../contexts/ProjectContext';
 import { DiscoveredNode, Project } from '../types';
 import { ProjectService } from '../services/ProjectService';
+import { getApiUrl, API_ENDPOINTS } from '../config/api';
 
 import 'reactflow/dist/style.css';
 
@@ -35,6 +36,8 @@ const GraphEditorPage: React.FC = () => {
   // Initialize nodes and edges from project
   const [nodes, setNodes, onNodesChange] = useNodesState(project?.graph_layout?.nodes || []);
   const [edges, setEdges, onEdgesChange] = useEdgesState(project?.graph_layout?.edges || []);
+  const [isRediscovering, setIsRediscovering] = useState(false);
+  const [discoveredNodes, setDiscoveredNodes] = useState<DiscoveredNode[]>(project?.discovered_nodes || []);
 
   const onConnect = useCallback((params: Edge | Connection) => {
     setEdges((eds) => addEdge(params, eds));
@@ -124,14 +127,14 @@ const GraphEditorPage: React.FC = () => {
   };
 
   const addAllNodes = () => {
-    if (!project || !project.discovered_nodes.length) return;
+    if (!discoveredNodes.length) return;
     
     // Calculate grid dimensions for spacing
-    const nodeCount = project.discovered_nodes.length;
+    const nodeCount = discoveredNodes.length;
     const gridSize = Math.ceil(Math.sqrt(nodeCount));
     const nodeSpacing = 250; // pixels between nodes
     
-    const newNodes = project.discovered_nodes.map((discoveredNode, index) => {
+    const newNodes = discoveredNodes.map((discoveredNode, index) => {
       // Calculate grid position
       const row = Math.floor(index / gridSize);
       const col = index % gridSize;
@@ -176,7 +179,6 @@ const GraphEditorPage: React.FC = () => {
     // Calculate grid dimensions: for n nodes, use ceil(sqrt(n)) columns
     // This creates a nearly square grid (e.g., 9 nodes = 3x3, 10 nodes = 4x3)
     const gridCols = Math.ceil(Math.sqrt(nodeCount));
-    const gridRows = Math.ceil(nodeCount / gridCols);
     const nodeSpacing = 250; // pixels between nodes
     
     const updatedNodes = nodes.map((node, index) => {
@@ -200,6 +202,67 @@ const GraphEditorPage: React.FC = () => {
         reactFlowInstance.fitView({ padding: 0.1 });
       }
     }, 100);
+  };
+
+  const reRunDiscovery = async () => {
+    if (!project) return;
+    
+    setIsRediscovering(true);
+    
+    try {
+      // Start discovery
+      const discoverResponse = await fetch(getApiUrl(API_ENDPOINTS.MQTT_DISCOVER), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(project.mqtt_config)
+      });
+      
+      if (!discoverResponse.ok) {
+        throw new Error('Failed to start discovery');
+      }
+      
+      // Wait a bit for discovery to run
+      await new Promise(resolve => setTimeout(resolve, 3000));
+      
+      // Get discovery status
+      const statusResponse = await fetch(getApiUrl(API_ENDPOINTS.MQTT_DISCOVERY_STATUS));
+      if (!statusResponse.ok) {
+        throw new Error('Failed to get discovery status');
+      }
+      
+      const statusData = await statusResponse.json();
+      const newDiscoveredNodes = statusData.discovered_nodes || [];
+      
+      // Update project with new discovered nodes
+      const updatedProject = {
+        ...project,
+        discovered_nodes: newDiscoveredNodes,
+        updated_at: new Date().toISOString()
+      };
+      
+      // Save updated project
+      ProjectService.saveProject(updatedProject);
+      
+      // Update local state
+      setDiscoveredNodes(newDiscoveredNodes);
+      
+      // Update context
+      updateGraphLayout(updatedProject.graph_layout.nodes, updatedProject.graph_layout.edges);
+      
+      // Remove inactive nodes from canvas
+      const activeEquipmentIds = new Set(newDiscoveredNodes.map((node: DiscoveredNode) => node.equipment_id));
+      setNodes(currentNodes => 
+        currentNodes.filter(node => activeEquipmentIds.has(node.data.equipment_id))
+      );
+      
+      alert(`Discovery completed! Found ${newDiscoveredNodes.length} active cells. Inactive cells have been removed from the canvas.`);
+      
+    } catch (error) {
+      console.error('Error during re-discovery:', error);
+      alert('Failed to re-run discovery. Please check your MQTT connection.');
+    } finally {
+      setIsRediscovering(false);
+    }
   };
 
   if (!project) {
@@ -246,17 +309,17 @@ const GraphEditorPage: React.FC = () => {
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-sm font-medium text-gray-700">Available Nodes</h2>
             <span className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded">
-              {project.discovered_nodes.length} discovered
+              {discoveredNodes.length} discovered
             </span>
           </div>
           <div className="space-y-2">
-            {project.discovered_nodes.length === 0 ? (
+            {discoveredNodes.length === 0 ? (
               <div className="text-center py-8">
                 <p className="text-sm text-gray-500 mb-2">No nodes discovered</p>
                 <p className="text-xs text-gray-400">Run discovery in project settings to find equipment</p>
               </div>
             ) : (
-              project.discovered_nodes.map((node: DiscoveredNode) => (
+              discoveredNodes.map((node: DiscoveredNode) => (
               <div
                 key={node.id}
                 className="p-3 bg-gray-50 rounded-lg border border-gray-200 cursor-move hover:bg-gray-100 transition-colors"
@@ -302,11 +365,11 @@ const GraphEditorPage: React.FC = () => {
                      <button
              onClick={addAllNodes}
              className="w-full minimal-button flex items-center justify-center"
-             disabled={project?.discovered_nodes.length === 0}
+             disabled={discoveredNodes.length === 0}
              title="Add all discovered nodes to the graph at once"
            >
              <Plus className="w-4 h-4 mr-2" />
-             Add All Nodes ({project?.discovered_nodes.length || 0})
+             Add All Nodes ({discoveredNodes.length})
            </button>
            <button
              onClick={arrangeInGrid}
@@ -316,6 +379,15 @@ const GraphEditorPage: React.FC = () => {
            >
              <Grid className="w-4 h-4 mr-2" />
              Arrange in Grid ({nodes.length} nodes)
+           </button>
+           <button
+             onClick={reRunDiscovery}
+             className="w-full minimal-button flex items-center justify-center"
+             disabled={isRediscovering || !project?.mqtt_config}
+             title="Re-run cell discovery to find active cells and remove inactive ones"
+           >
+             <RefreshCw className={`w-4 h-4 mr-2 ${isRediscovering ? 'animate-spin' : ''}`} />
+             {isRediscovering ? 'Re-discovering...' : 'Re-run Discovery'}
            </button>
         </div>
       </div>
