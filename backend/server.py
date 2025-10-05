@@ -5,6 +5,7 @@ import json
 import logging
 import threading
 import time
+import os
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 from concurrent.futures import ThreadPoolExecutor
@@ -15,6 +16,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from database_service import db
 from pydantic import BaseModel
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Add the parent directory to Python path to import from Scenario_2
 import sys
@@ -42,15 +47,16 @@ class GraphDataManager:
     def set_project(self, project):
         """Set the current project and initialize nodes from project data"""
         self.project = project
-        # Only clear if we don't have any nodes yet, preserve dynamic nodes
-        if not self.nodes_data:
-            self.nodes_data = {}
-        if not self.sensor_data:
-            self.sensor_data = {}
+        
+        # ALWAYS clear existing data when setting a new project
+        self.nodes_data = {}
+        self.sensor_data = {}
         
         if project and project.get('graph_layout', {}).get('nodes'):
+            logger.info(f"🔍 GraphDataManager initializing with {len(project['graph_layout']['nodes'])} nodes from project")
             for node in project['graph_layout']['nodes']:
                 equipment_id = node['data']['equipment_id']
+                logger.info(f"🔍 Initializing node: {equipment_id}")
                 self.nodes_data[equipment_id] = {
                     'id': node['id'],
                     'type': 'custom',
@@ -63,20 +69,47 @@ class GraphDataManager:
                     }
                 }
                 self.sensor_data[equipment_id] = {}
+            
+            logger.info(f"🔍 GraphDataManager initialized with nodes: {list(self.nodes_data.keys())}")
+        else:
+            logger.info("🔍 No graph layout nodes found in project")
     
     def update_sensor_data(self, equipment_id: str, sensor_type: str, sensor_reading: dict):
         """Update sensor data for a specific equipment and sensor type"""
-        # Ensure equipment exists in our data
+        # Only process equipment that exists in the project's graph layout
         if equipment_id not in self.sensor_data:
-            # Create a new node if it doesn't exist
+            logger.info(f"🔍 Equipment {equipment_id} not in sensor_data, checking if it's in graph layout")
+            
+            # Check if this equipment is in the project's graph layout
+            if not self.project or not self.project.get('graph_layout', {}).get('nodes'):
+                logger.info(f"🔍 No project or graph layout, skipping {equipment_id}")
+                return  # No project or no graph layout, skip
+            
+            # Check if this equipment_id is in the graph layout
+            equipment_in_layout = any(
+                node['data']['equipment_id'] == equipment_id 
+                for node in self.project['graph_layout']['nodes']
+            )
+            
+            if not equipment_in_layout:
+                logger.info(f"🔍 Equipment {equipment_id} not in graph layout, skipping")
+                return  # Equipment not in graph layout, skip
+            
+            logger.info(f"🔍 Equipment {equipment_id} is in graph layout, creating node")
+            
+            # Find the original node data from the graph layout
+            original_node = next(
+                node for node in self.project['graph_layout']['nodes']
+                if node['data']['equipment_id'] == equipment_id
+            )
+            
+            # Create a new node using the original node data
             self.nodes_data[equipment_id] = {
-                'id': equipment_id,
+                'id': original_node['id'],
                 'type': 'custom',
-                'position': {'x': len(self.nodes_data) * 200, 'y': len(self.nodes_data) * 100},
+                'position': original_node['position'],
                 'data': {
-                    'equipment_id': equipment_id,
-                    'equipment_type': equipment_id.split('_')[0] if '_' in equipment_id else 'unknown',
-                    'label': equipment_id,
+                    **original_node['data'],
                     'sensors': [],
                     'status': 'idle',
                     'last_updated': None
@@ -119,6 +152,8 @@ class GraphDataManager:
         # Get edges from project if available
         if self.project and self.project.get('graph_layout', {}).get('edges'):
             edges = self.project['graph_layout']['edges']
+        
+        logger.info(f"🔍 GraphDataManager sending {len(nodes)} nodes: {[n['id'] for n in nodes]}")
         
         return {
             'nodes': nodes,
@@ -730,6 +765,45 @@ async def get_storage_stats():
         stats = db.get_storage_stats()
         return stats
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Chatbot API Endpoints
+@app.post("/api/chatbot/query")
+async def chatbot_query(request: dict):
+    """Process chatbot query with LLM"""
+    try:
+        from gemini_llm_service import llm_service
+        
+        user_query = request.get('query', '')
+        page_type = request.get('page_type', 'monitor')  # 'monitor' or 'equipment'
+        cell_id = request.get('cell_id', None)
+        
+        if not user_query:
+            raise HTTPException(status_code=400, detail="Query is required")
+        
+        # Process query with LLM
+        response = await llm_service.process_query(user_query, page_type, cell_id)
+        
+        return {
+            "response": response,
+            "timestamp": datetime.now().isoformat(),
+            "page_type": page_type,
+            "cell_id": cell_id
+        }
+        
+    except Exception as e:
+        logger.error(f"Chatbot query failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Query processing failed: {str(e)}")
+
+@app.get("/api/chatbot/cells")
+async def get_available_cells():
+    """Get list of available cells for chatbot context"""
+    try:
+        from gemini_llm_service import llm_service
+        cells = llm_service.get_available_cells()
+        return {"cells": cells, "count": len(cells)}
+    except Exception as e:
+        logger.error(f"Failed to get available cells: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/health")

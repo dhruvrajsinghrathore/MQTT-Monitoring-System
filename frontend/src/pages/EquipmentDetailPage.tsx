@@ -403,14 +403,14 @@ const EquipmentDetailPage: React.FC = () => {
 
       {/* Main Content */}
       <div className="p-6">
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className={`flex gap-6 ${isChatbotOpen ? 'h-[calc(100vh-120px)]' : ''}`}>
           
           {/* Current Values */}
-          <div className="lg:col-span-1">
-            <div className="bg-white rounded-lg shadow border border-gray-200 p-6">
+          <div className={`${isChatbotOpen ? 'w-1/5' : 'w-1/4'} flex-shrink-0`}>
+            <div className="bg-white rounded-lg shadow border border-gray-200 p-6 h-[calc(100vh-120px)] flex flex-col">
               <h3 className="text-lg font-medium text-gray-900 mb-4">Current Values</h3>
               
-              <div className="space-y-4">
+              <div className="space-y-4 overflow-y-auto flex-1 pr-2">
                 {equipment?.sensors?.map((sensor: any, index: number) => (
                   <div key={index} className="p-4 rounded-lg bg-gray-50 border border-gray-100">
                     <div className="flex items-center gap-3 mb-2">
@@ -438,9 +438,9 @@ const EquipmentDetailPage: React.FC = () => {
           </div>
 
           {/* Line Chart */}
-          <div className="lg:col-span-2">
-            <div className="bg-white rounded-lg shadow border border-gray-200 p-6">
-              <div className="space-y-4 mb-4">
+          <div className="flex-1 min-w-0">
+            <div className="bg-white rounded-lg shadow border border-gray-200 p-6 h-[calc(100vh-120px)] flex flex-col">
+              <div className="flex-shrink-0 mb-4">
                 <div className="flex items-center justify-between">
                   <h3 className="text-lg font-medium text-gray-900">Sensor Trends</h3>
                   <div className="flex items-center space-x-2 text-sm text-gray-600">
@@ -448,11 +448,13 @@ const EquipmentDetailPage: React.FC = () => {
                     <span>{chartData.length} data points</span>
                   </div>
                 </div>
+              </div>
 
-                {/* Feature Selection */}
-                <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
-                  <h4 className="text-sm font-medium text-gray-700 mb-2">Select Features to Display</h4>
-                  <div className="flex flex-wrap gap-2">
+              {/* Feature Selection */}
+              <div className="flex-shrink-0 mb-4">
+                <div className="bg-gray-50 rounded-lg border border-gray-200 p-4">
+                  <h4 className="text-base font-medium text-gray-700 mb-3">Select Features to Display</h4>
+                  <div className="flex flex-wrap gap-2 max-h-28 overflow-y-auto">
                     {availableFeatures.map(feature => (
                       <button
                         key={feature}
@@ -465,7 +467,7 @@ const EquipmentDetailPage: React.FC = () => {
                           }
                           return newSet;
                         })}
-                        className={`px-3 py-1 rounded-full text-sm font-medium transition-colors
+                        className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors
                           ${selectedFeatures.has(feature)
                             ? 'bg-blue-100 text-blue-800 hover:bg-blue-200'
                             : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
@@ -479,7 +481,7 @@ const EquipmentDetailPage: React.FC = () => {
               </div>
               
               {chartData.length > 0 ? (
-                <div className="h-96">
+                <div className="flex-1 min-h-0">
                   <ResponsiveContainer width="100%" height="100%">
                     <LineChart data={chartData}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
@@ -507,7 +509,17 @@ const EquipmentDetailPage: React.FC = () => {
                           boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)'
                         }}
                       />
-                      <Legend />
+                      <Legend 
+                        wrapperStyle={{
+                          paddingTop: '15px',
+                          fontSize: '14px',
+                          lineHeight: '1.5'
+                        }}
+                        iconType="circle"
+                        layout="horizontal"
+                        verticalAlign="bottom"
+                        align="center"
+                      />
                       {sensorTypes
                         .filter(type => selectedFeatures.size === 0 || selectedFeatures.has(type))
                         .map((sensorType, index) => (
@@ -553,6 +565,8 @@ const EquipmentDetailPage: React.FC = () => {
           isOpen={isChatbotOpen} 
           onClose={() => setIsChatbotOpen(false)}
           context={`equipment "${equipment?.equipment_id || equipmentId}" detail view`}
+          pageType="equipment"
+          cellId={equipment?.equipment_id || equipmentId}
         />
       )}
     </div>

@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import {
   ReactFlow,
@@ -37,7 +37,71 @@ const GraphEditorPage: React.FC = () => {
   const [nodes, setNodes, onNodesChange] = useNodesState(project?.graph_layout?.nodes || []);
   const [edges, setEdges, onEdgesChange] = useEdgesState(project?.graph_layout?.edges || []);
   const [isRediscovering, setIsRediscovering] = useState(false);
-  const [discoveredNodes, setDiscoveredNodes] = useState<DiscoveredNode[]>(project?.discovered_nodes || []);
+  
+  // Initialize discovered nodes from project, but also fetch fresh data on mount
+  const [discoveredNodes, setDiscoveredNodes] = useState<DiscoveredNode[]>([]);
+  
+  // Fetch discovered nodes on component mount
+  useEffect(() => {
+    const fetchDiscoveredNodes = async () => {
+      if (!project) return;
+      
+      try {
+        const response = await fetch(getApiUrl(API_ENDPOINTS.MQTT_DISCOVERY_STATUS));
+        if (response.ok) {
+          const data = await response.json();
+          const freshDiscoveredNodes = data.discovered_nodes || [];
+          setDiscoveredNodes(freshDiscoveredNodes);
+          
+          // Update project with fresh discovered nodes if they're different
+          if (JSON.stringify(freshDiscoveredNodes) !== JSON.stringify(project.discovered_nodes)) {
+            const updatedProject = {
+              ...project,
+              discovered_nodes: freshDiscoveredNodes,
+              updated_at: new Date().toISOString()
+            };
+            ProjectService.saveProject(updatedProject);
+          }
+        } else {
+          // Fallback to project's discovered nodes
+          setDiscoveredNodes(project.discovered_nodes || []);
+        }
+      } catch (error) {
+        console.error('Failed to fetch discovered nodes:', error);
+        // Fallback to project's discovered nodes
+        setDiscoveredNodes(project.discovered_nodes || []);
+      }
+    };
+    
+    fetchDiscoveredNodes();
+  }, [project]);
+
+  // Create a combined list of available nodes (discovered + nodes on canvas)
+  const availableNodes = React.useMemo(() => {
+    const discoveredSet = new Set(discoveredNodes.map(node => node.equipment_id));
+    
+    // Start with discovered nodes
+    const combined = [...discoveredNodes];
+    
+    // Add nodes from canvas that aren't in discovered nodes
+    nodes.forEach(node => {
+      if (!discoveredSet.has(node.data.equipment_id)) {
+        // Create a DiscoveredNode-like object for canvas nodes
+        combined.push({
+          id: node.data.equipment_id,
+          equipment_id: node.data.equipment_id,
+          equipment_type: node.data.equipment_type || 'unknown',
+          topics: [],
+          sample_data: {},
+          message_count: 0,
+          first_seen: new Date().toISOString(),
+          last_seen: new Date().toISOString()
+        });
+      }
+    });
+    
+    return combined;
+  }, [discoveredNodes, nodes]);
 
   const onConnect = useCallback((params: Edge | Connection) => {
     setEdges((eds) => addEdge(params, eds));
@@ -127,14 +191,14 @@ const GraphEditorPage: React.FC = () => {
   };
 
   const addAllNodes = () => {
-    if (!discoveredNodes.length) return;
+    if (!availableNodes.length) return;
     
     // Calculate grid dimensions for spacing
-    const nodeCount = discoveredNodes.length;
+    const nodeCount = availableNodes.length;
     const gridSize = Math.ceil(Math.sqrt(nodeCount));
     const nodeSpacing = 250; // pixels between nodes
     
-    const newNodes = discoveredNodes.map((discoveredNode, index) => {
+    const newNodes = availableNodes.map((discoveredNode, index) => {
       // Calculate grid position
       const row = Math.floor(index / gridSize);
       const col = index % gridSize;
@@ -309,19 +373,19 @@ const GraphEditorPage: React.FC = () => {
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-sm font-medium text-gray-700">Available Nodes</h2>
             <span className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded">
-              {discoveredNodes.length} discovered
+              {availableNodes.length} available
             </span>
           </div>
           <div className="space-y-2">
-            {discoveredNodes.length === 0 ? (
+            {availableNodes.length === 0 ? (
               <div className="text-center py-8">
-                <p className="text-sm text-gray-500 mb-2">No nodes discovered</p>
+                <p className="text-sm text-gray-500 mb-2">No nodes available</p>
                 <p className="text-xs text-gray-400">Run discovery in project settings to find equipment</p>
               </div>
             ) : (
-              discoveredNodes.map((node: DiscoveredNode) => (
+              availableNodes.map((node: DiscoveredNode) => (
               <div
-                key={node.id}
+                key={node.equipment_id}
                 className="p-3 bg-gray-50 rounded-lg border border-gray-200 cursor-move hover:bg-gray-100 transition-colors"
                 draggable
                 onDragStart={(event) => {
@@ -365,11 +429,11 @@ const GraphEditorPage: React.FC = () => {
                      <button
              onClick={addAllNodes}
              className="w-full minimal-button flex items-center justify-center"
-             disabled={discoveredNodes.length === 0}
+             disabled={availableNodes.length === 0}
              title="Add all discovered nodes to the graph at once"
            >
              <Plus className="w-4 h-4 mr-2" />
-             Add All Nodes ({discoveredNodes.length})
+             Add All Nodes ({availableNodes.length})
            </button>
            <button
              onClick={arrangeInGrid}

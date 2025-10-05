@@ -31,8 +31,18 @@ const MonitoringPage: React.FC = () => {
   // Get project from location state or context
   const project: Project | null = (location.state as any)?.project || contextProject;
   
+  // Debug project structure
+  console.log('🔍 Project structure:', {
+    name: project?.name,
+    discovered_nodes_count: project?.discovered_nodes?.length,
+    graph_layout_nodes_count: project?.graph_layout?.nodes?.length,
+    graph_layout_nodes: project?.graph_layout?.nodes?.map(n => n.id)
+  });
+  
   // Only initialize nodes/edges from project once, do not reset on project change
-  const [nodes, setNodes, onNodesChange] = useNodesState(project?.graph_layout?.nodes ? project.graph_layout.nodes.map((node: any) => ({ ...node, type: 'custom' })) : []);
+  const initialNodes = project?.graph_layout?.nodes ? project.graph_layout.nodes.map((node: any) => ({ ...node, type: 'custom' })) : [];
+  console.log('🔍 Initial nodes from project:', initialNodes.length, initialNodes.map(n => n.id));
+  const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(project?.graph_layout?.edges ? project.graph_layout.edges : []);
   const [isMonitoring, setIsMonitoring] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected' | 'error'>('disconnected');
@@ -156,6 +166,7 @@ const MonitoringPage: React.FC = () => {
               console.log('📊 Received graph update:', message.data);
               console.log('Nodes received:', message.data?.nodes);
               console.log('Edges received:', message.data?.edges);
+              console.log('🔍 Number of nodes received:', message.data?.nodes?.length);
 
               // Defensive check: ensure nodes is an array and each node has id
               if (message.data && Array.isArray(message.data.nodes)) {
@@ -163,10 +174,28 @@ const MonitoringPage: React.FC = () => {
                 if (validNodes.length !== message.data.nodes.length) {
                   console.warn('Some nodes missing id or invalid:', message.data.nodes);
                 }
-                setNodes(validNodes.map((node: any) => ({
-                  ...node,
-                  type: 'custom'
-                })));
+                
+                console.log('🔍 Valid nodes from WebSocket:', validNodes.length, validNodes.map((n: any) => n.id));
+                
+                // Preserve existing node positions when updating
+                setNodes(currentNodes => {
+                  const nodeMap = new Map(currentNodes.map(node => [node.id, node]));
+                  
+                  const updatedNodes = validNodes.map((node: any) => {
+                    const existingNode = nodeMap.get(node.id);
+                    return {
+                      ...node,
+                      type: 'custom',
+                      // Preserve position if node was manually moved
+                      position: existingNode?.position || node.position,
+                      // Preserve dragging state
+                      dragging: existingNode?.dragging || false
+                    };
+                  });
+                  
+                  console.log('🔍 Final updated nodes:', updatedNodes.length, updatedNodes.map((n: any) => n.id));
+                  return updatedNodes;
+                });
               }
 
               // Defensive check: ensure edges is an array and each edge has id/source/target
@@ -442,6 +471,9 @@ const MonitoringPage: React.FC = () => {
                   onEdgesChange={onEdgesChange}
                   nodeTypes={nodeTypes}
                   onNodeClick={handleNodeClick}
+                  nodesDraggable={true}
+                  nodesConnectable={false}
+                  elementsSelectable={true}
                   fitView
                   fitViewOptions={{ padding: 0.2 }}
                   className="bg-gray-50"
@@ -463,6 +495,7 @@ const MonitoringPage: React.FC = () => {
           isOpen={isChatbotOpen} 
           onClose={() => setIsChatbotOpen(false)}
           context={`project "${project.name}" monitoring dashboard`}
+          pageType="monitor"
         />
       )}
     </div>

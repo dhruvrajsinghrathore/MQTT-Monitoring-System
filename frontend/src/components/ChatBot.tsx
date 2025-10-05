@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { X, Send, Bot, User } from 'lucide-react';
+import { X, Send, Bot, User, GripVertical } from 'lucide-react';
+import { getApiUrl } from '../config/api';
 
 interface ChatMessage {
   id: string;
@@ -12,28 +13,127 @@ interface ChatBotProps {
   isOpen: boolean;
   onClose: () => void;
   context?: string; // Additional context for the chatbot
+  pageType?: 'monitor' | 'equipment'; // Page type for context
+  cellId?: string; // Cell ID for equipment page
 }
 
-const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
+const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose, context, pageType = 'monitor', cellId }) => {
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       id: '1',
-      text: `Hello! I'm your MQTT monitoring assistant. I can help you with questions about your equipment, sensor data, and system status. How can I assist you today?`,
+      text: `Hello! I'm your AI-powered MQTT monitoring assistant. I can help you analyze your cell data, understand sensor readings, and provide insights about your equipment. ${context ? `I can see you're currently viewing ${context}.` : ''} How can I assist you today?`,
       sender: 'bot',
       timestamp: new Date()
     }
   ]);
   const [inputText, setInputText] = useState('');
   const [isTyping, setIsTyping] = useState(false);
+  const [width, setWidth] = useState(Math.floor(window.innerWidth * 0.3)); // Default 30% of screen width
+  const [isResizing, setIsResizing] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const chatBotRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (messagesEndRef.current) {
+      // Find the messages container (parent with overflow-y-auto)
+      const messagesContainer = messagesEndRef.current.closest('.overflow-y-auto');
+      if (messagesContainer) {
+        // Scroll within the messages container only
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+      } else {
+        // Fallback: use scrollIntoView with minimal page impact
+        messagesEndRef.current.scrollIntoView({ 
+          behavior: 'smooth', 
+          block: 'end',
+          inline: 'nearest'
+        });
+      }
+    }
+  };
+
+  const formatResponse = (text: string) => {
+    // Simple formatting - just split by lines and format based on content
+    const lines = text.split('\n').map(line => line.trim()).filter(line => line.length > 0);
+    
+    return lines.map((line, index) => {
+      // Main headings (ALL CAPS ending with colon)
+      if (line.match(/^[A-Z][A-Z\s]+:$/)) {
+        return (
+          <div key={index} className="font-bold text-gray-900 mt-4 mb-2 text-lg">
+            {line}
+          </div>
+        );
+      }
+      // Cell names (CELL followed by number)
+      else if (line.match(/^CELL\d+:/)) {
+        return (
+          <div key={index} className="font-semibold text-blue-600 mt-3 mb-2 text-base">
+            {line}
+          </div>
+        );
+      }
+      // Property headings (Title Case ending with colon)
+      else if (line.match(/^[A-Z][a-z\s]+:$/)) {
+        return (
+          <div key={index} className="font-medium text-gray-700 mt-2 mb-1">
+            {line}
+          </div>
+        );
+      }
+      // Sensor readings (contains colon and parentheses)
+      else if (line.includes(':') && line.includes('(') && line.includes(')')) {
+        return (
+          <div key={index} className="ml-4 mb-1 text-gray-600">
+            • {line}
+          </div>
+        );
+      }
+      // Regular text
+      else {
+        return (
+          <div key={index} className="mb-1 text-gray-700">
+            {line}
+          </div>
+        );
+      }
+    });
   };
 
   useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
+    // Only scroll to bottom if there are messages and the chatbot is open
+    if (messages.length > 0 && isOpen) {
+      scrollToBottom();
+    }
+  }, [messages, isOpen]);
+
+  // Handle mouse events for resizing
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isResizing) return;
+      
+      const newWidth = window.innerWidth - e.clientX;
+      const minWidth = 400; // Increased minimum width for better readability
+      const maxWidth = window.innerWidth * 0.8; // Maximum 80% of screen width
+      
+      if (newWidth >= minWidth && newWidth <= maxWidth) {
+        setWidth(newWidth);
+      }
+    };
+
+    const handleMouseUp = () => {
+      setIsResizing(false);
+    };
+
+    if (isResizing) {
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+    }
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isResizing]);
 
   const handleSendMessage = async () => {
     if (!inputText.trim()) return;
@@ -46,58 +146,50 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
     };
 
     setMessages(prev => [...prev, userMessage]);
+    const currentQuery = inputText;
     setInputText('');
     setIsTyping(true);
 
-    // Simulate bot response (in a real implementation, this would call an API)
-    setTimeout(() => {
-      const botResponse = generateBotResponse(inputText);
+    try {
+      // Call backend LLM service
+      const response = await fetch(getApiUrl('/api/chatbot/query'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          query: currentQuery,
+          page_type: pageType,
+          cell_id: cellId
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      
       const botMessage: ChatMessage = {
         id: (Date.now() + 1).toString(),
-        text: botResponse,
+        text: data.response,
         sender: 'bot',
         timestamp: new Date()
       };
+      
       setMessages(prev => [...prev, botMessage]);
+    } catch (error) {
+      console.error('Error calling LLM service:', error);
+      const errorMessage: ChatMessage = {
+        id: (Date.now() + 1).toString(),
+        text: `I apologize, but I encountered an error processing your query. Please try again or check if the backend service is running. Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        sender: 'bot',
+        timestamp: new Date()
+      };
+      setMessages(prev => [...prev, errorMessage]);
+    } finally {
       setIsTyping(false);
-    }, 1000 + Math.random() * 1000); // Random delay between 1-2 seconds
-  };
-
-  const generateBotResponse = (userInput: string): string => {
-    const input = userInput.toLowerCase();
-    
-    // Equipment-related responses
-    if (input.includes('equipment') || input.includes('cell')) {
-      return "I can help you understand your equipment status. Each cell in your system monitors different sensors like temperature, pressure, and flow rates. You can click on any cell in the monitoring view to see detailed sensor data and trends.";
     }
-    
-    // Sensor-related responses
-    if (input.includes('sensor') || input.includes('data')) {
-      return "Your sensors are collecting real-time data including temperature, pressure, flow rates, and composition measurements. The data is displayed in both the monitoring dashboard and detailed equipment views. You can also view historical data trends over time.";
-    }
-    
-    // Connection-related responses
-    if (input.includes('connection') || input.includes('connect') || input.includes('disconnect')) {
-      return "The connection status shows whether your system is successfully communicating with the MQTT broker. Green means connected, red means there's an issue. Make sure your MQTT broker is running and accessible.";
-    }
-    
-    // Monitoring-related responses
-    if (input.includes('monitor') || input.includes('start') || input.includes('stop')) {
-      return "You can start and stop monitoring using the controls in the header. When monitoring is active, you'll see real-time updates from your equipment. The recording feature lets you save data sessions for later analysis.";
-    }
-    
-    // Chart-related responses
-    if (input.includes('chart') || input.includes('graph') || input.includes('trend')) {
-      return "The charts show sensor data trends over time. You can select which sensor types to display using the feature selection buttons. The charts update in real-time as new data arrives from your equipment.";
-    }
-    
-    // General help
-    if (input.includes('help') || input.includes('how')) {
-      return "I can help you with:\n• Understanding your equipment and sensors\n• Interpreting connection status\n• Explaining monitoring controls\n• Reading charts and trends\n• Troubleshooting issues\n\nWhat specific topic would you like to know more about?";
-    }
-    
-    // Default response
-    return "I understand you're asking about: \"" + userInput + "\". I'm here to help with your MQTT monitoring system. You can ask me about equipment status, sensor data, connection issues, or how to use the monitoring features. What would you like to know more about?";
   };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
@@ -110,12 +202,23 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
   if (!isOpen) return null;
 
   return (
-    <div className="w-96 bg-white shadow-xl border-l border-gray-200 flex flex-col h-screen">
+    <div 
+      ref={chatBotRef}
+      className="bg-white shadow-xl border-l border-gray-200 flex flex-col h-screen relative"
+      style={{ width: `${width}px` }}
+    >
+      {/* Resize handle */}
+      <div
+        className="absolute left-0 top-0 bottom-0 w-1 bg-gray-300 hover:bg-blue-500 cursor-col-resize z-10"
+        onMouseDown={() => setIsResizing(true)}
+      >
+        <div className="absolute left-0 top-1/2 transform -translate-y-1/2 w-1 h-8 bg-gray-400 hover:bg-blue-500 rounded-r"></div>
+      </div>
       {/* Header */}
       <div className="bg-blue-600 text-white p-4 flex items-center justify-between flex-shrink-0">
         <div className="flex items-center space-x-2">
           <Bot className="w-5 h-5" />
-          <h3 className="font-semibold">MQTT Assistant</h3>
+          <h3 className="font-semibold">AI MQTT Assistant</h3>
         </div>
         <button
           onClick={onClose}
@@ -133,11 +236,15 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
             className={`flex ${message.sender === 'user' ? 'justify-end' : 'justify-start'}`}
           >
             <div
-              className={`max-w-xs px-4 py-2 rounded-lg ${
+              className={`px-4 py-2 rounded-lg ${
                 message.sender === 'user'
                   ? 'bg-blue-600 text-white'
                   : 'bg-gray-100 text-gray-900'
               }`}
+              style={{
+                maxWidth: `${Math.min(width - 80, 600)}px`, // Responsive max width
+                minWidth: '200px' // Minimum width for readability
+              }}
             >
               <div className="flex items-start space-x-2">
                 {message.sender === 'bot' && (
@@ -147,8 +254,10 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
                   <User className="w-4 h-4 mt-0.5 flex-shrink-0" />
                 )}
                 <div className="flex-1">
-                  <p className="text-sm whitespace-pre-wrap">{message.text}</p>
-                  <p className="text-xs opacity-70 mt-1">
+                  <div className="text-base whitespace-pre-wrap break-words leading-relaxed">
+                    {formatResponse(message.text)}
+                  </div>
+                  <p className="text-xs opacity-70 mt-2">
                     {message.timestamp.toLocaleTimeString()}
                   </p>
                 </div>
@@ -159,7 +268,13 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
         
         {isTyping && (
           <div className="flex justify-start">
-            <div className="bg-gray-100 text-gray-900 px-4 py-2 rounded-lg">
+            <div 
+              className="bg-gray-100 text-gray-900 px-4 py-2 rounded-lg"
+              style={{
+                maxWidth: `${Math.min(width - 80, 600)}px`,
+                minWidth: '200px'
+              }}
+            >
               <div className="flex items-center space-x-2">
                 <Bot className="w-4 h-4" />
                 <div className="flex space-x-1">
@@ -183,7 +298,7 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
             onKeyPress={handleKeyPress}
-            placeholder="Ask me about your MQTT system..."
+            placeholder="Ask me about your cell data..."
             className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             disabled={isTyping}
           />
