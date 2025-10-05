@@ -51,7 +51,7 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose, context, pageType = 
     }
   };
 
-  const formatResponse = (text: string) => {
+  const formatResponse = (text: string, isUserMessage: boolean = false) => {
     // Simple formatting - just split by lines and format based on content
     const lines = text.split('\n').map(line => line.trim()).filter(line => line.length > 0);
     
@@ -59,7 +59,7 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose, context, pageType = 
       // Main headings (ALL CAPS ending with colon)
       if (line.match(/^[A-Z][A-Z\s]+:$/)) {
         return (
-          <div key={index} className="font-bold text-gray-900 mt-4 mb-2 text-lg">
+          <div key={index} className={`font-bold mt-4 mb-2 text-lg ${isUserMessage ? 'text-white' : 'text-gray-900'}`}>
             {line}
           </div>
         );
@@ -67,7 +67,7 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose, context, pageType = 
       // Cell names (CELL followed by number)
       else if (line.match(/^CELL\d+:/)) {
         return (
-          <div key={index} className="font-semibold text-blue-600 mt-3 mb-2 text-base">
+          <div key={index} className={`font-semibold mt-3 mb-2 text-base ${isUserMessage ? 'text-white' : 'text-gray-900'}`}>
             {line}
           </div>
         );
@@ -75,7 +75,7 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose, context, pageType = 
       // Property headings (Title Case ending with colon)
       else if (line.match(/^[A-Z][a-z\s]+:$/)) {
         return (
-          <div key={index} className="font-medium text-gray-700 mt-2 mb-1">
+          <div key={index} className={`font-medium mt-2 mb-1 ${isUserMessage ? 'text-white' : 'text-gray-700'}`}>
             {line}
           </div>
         );
@@ -83,7 +83,7 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose, context, pageType = 
       // Sensor readings (contains colon and parentheses)
       else if (line.includes(':') && line.includes('(') && line.includes(')')) {
         return (
-          <div key={index} className="ml-4 mb-1 text-gray-600">
+          <div key={index} className={`ml-4 mb-1 ${isUserMessage ? 'text-white' : 'text-gray-600'}`}>
             • {line}
           </div>
         );
@@ -91,7 +91,7 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose, context, pageType = 
       // Regular text
       else {
         return (
-          <div key={index} className="mb-1 text-gray-700">
+          <div key={index} className={`mb-1 ${isUserMessage ? 'text-white' : 'text-gray-700'}`}>
             {line}
           </div>
         );
@@ -238,12 +238,13 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose, context, pageType = 
             <div
               className={`px-4 py-2 rounded-lg ${
                 message.sender === 'user'
-                  ? 'bg-blue-600 text-white'
-                  : 'bg-gray-100 text-gray-900'
+                  ? 'bg-blue-500'
+                  : 'bg-white text-gray-800 border border-gray-200'
               }`}
               style={{
                 maxWidth: `${Math.min(width - 80, 600)}px`, // Responsive max width
-                minWidth: '200px' // Minimum width for readability
+                minWidth: '200px', // Minimum width for readability
+                color: message.sender === 'user' ? '#ffffff' : undefined // Force white text for user messages
               }}
             >
               <div className="flex items-start space-x-2">
@@ -254,10 +255,16 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose, context, pageType = 
                   <User className="w-4 h-4 mt-0.5 flex-shrink-0" />
                 )}
                 <div className="flex-1">
-                  <div className="text-base whitespace-pre-wrap break-words leading-relaxed">
-                    {formatResponse(message.text)}
+                  <div 
+                    className="text-base whitespace-pre-wrap break-words leading-relaxed"
+                    style={{ color: message.sender === 'user' ? '#ffffff' : undefined }}
+                  >
+                    {formatResponse(message.text, message.sender === 'user')}
                   </div>
-                  <p className="text-xs opacity-70 mt-2">
+                  <p 
+                    className="text-xs opacity-70 mt-2"
+                    style={{ color: message.sender === 'user' ? '#ffffff' : undefined }}
+                  >
                     {message.timestamp.toLocaleTimeString()}
                   </p>
                 </div>

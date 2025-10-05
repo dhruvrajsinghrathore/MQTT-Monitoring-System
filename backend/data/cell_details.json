@@ -95,6 +95,37 @@
         "critical": ["pH < 6.8", "pH > 7.6", "o2_percent < 40%", "viability < 80%"],
         "warning": ["flow_rate < 1 µL/min", "pressure > 150 mbar", "glucose < 5 mM"]
       }
+    },
+    "cell_4": {
+      "equipment_id": "cell_4",
+      "equipment_type": "cell",
+      "name": "Cell Culture Chamber 4",
+      "description": "Specialized cell culture monitoring chamber with enhanced optical sensors",
+      "location": "Lab Station C",
+      "status": "active",
+      "created_date": "2025-01-10T10:00:00Z",
+      "last_maintenance": "2025-01-14T11:20:00Z",
+      "sensor_capabilities": {
+        "imaging": ["tumor_prolif_index", "tumor_EMT_index", "qpi_cell_count", "qpi_confluence_pct", "qpi_dry_mass_pg"],
+        "electrochemical": ["aptamer_IL6_nM", "aptamer_TNFa_nM"],
+        "optical": ["o2_percent", "pH"],
+        "amperometric": ["glucose_mM"],
+        "impedance": ["barrier_impedance_kOhm"],
+        "flow": ["flow_uL_min"],
+        "pressure": ["pressure_mbar"],
+        "fluorescence": ["hcs_ROS_AU", "hcs_Ca_ratio", "hcs_viability_pct"]
+      },
+      "operational_ranges": {
+        "temperature": "37.0 ± 0.5°C",
+        "humidity": "95-98%",
+        "co2": "5%",
+        "flow_rate": "0-20 µL/min",
+        "pressure": "30-200 mbar"
+      },
+      "alerts": {
+        "critical": ["pH < 6.8", "pH > 7.6", "o2_percent < 40%", "viability < 80%"],
+        "warning": ["flow_rate < 1 µL/min", "pressure > 150 mbar", "glucose < 5 mM"]
+      }
     }
   },
   "sensor_descriptions": {
