@@ -165,7 +165,7 @@ Warning Alerts: {', '.join(cell_info.get('alerts', {}).get('warning', []))}
         
         return context
     
-    def _build_prompt(self, user_query: str, page_type: str, cell_id: Optional[str] = None) -> str:
+    def _build_prompt(self, user_query: str, page_type: str, cell_id: Optional[str] = None, references: List[str] = None) -> str:
         """Build the complete prompt for Gemini"""
         
         if page_type == "monitor":
@@ -178,6 +178,15 @@ Warning Alerts: {', '.join(cell_info.get('alerts', {}).get('warning', []))}
             context = self._build_monitor_context()
             page_context = "monitoring dashboard"
         
+        # Build reference context if references are provided
+        reference_context = ""
+        if references:
+            reference_context = f"""
+## Referenced Data Points
+The user has referenced these specific data points using @ symbols: {', '.join(references)}
+Please pay special attention to these data points in your response and provide detailed information about them.
+"""
+        
         prompt = f"""
 You are an AI assistant for an MQTT-based cell monitoring system. You help users understand their cell culture data, sensor readings, and system status.
 
@@ -185,7 +194,7 @@ You are an AI assistant for an MQTT-based cell monitoring system. You help users
 You are currently on the {page_context}. Here's the relevant data:
 
 {context}
-
+{reference_context}
 ## User Query
 {user_query}
 
@@ -197,7 +206,9 @@ You are currently on the {page_context}. Here's the relevant data:
 5. Be conversational but informative
 6. If you don't have enough information, say so
 7. Focus on the biological/technical significance of the readings
-8. **FORMATTING: Use simple, clean formatting like a normal chat response:**
+8. If the user referenced specific data points with @ symbols, focus your response on those data points
+9. **IMPORTANT: When referencing data points mentioned with @ symbols, use the exact names provided by the user**
+10. **FORMATTING: Use simple, clean formatting like a normal chat response:**
    - Use headings with CAPS (e.g., "CELL STATUS SUMMARY:")
    - Use cell names like "CELL1:" or "CELL2:" for each cell section
    - Use property names like "Status:", "Location:", "Sensor Readings:" for subsections
@@ -235,15 +246,15 @@ You are currently on the {page_context}. Here's the relevant data:
         
         return text
     
-    async def process_query(self, user_query: str, page_type: str, cell_id: Optional[str] = None) -> str:
+    async def process_query(self, user_query: str, page_type: str, cell_id: Optional[str] = None, references: List[str] = None) -> str:
         """Process user query and return AI response"""
         try:
             # Check if model is available
             if self.model is None:
                 return "I apologize, but the AI service is currently unavailable. Please check the system configuration and try again later."
             
-            # Build the prompt
-            prompt = self._build_prompt(user_query, page_type, cell_id)
+            # Build the prompt (now includes references)
+            prompt = self._build_prompt(user_query, page_type, cell_id, references or [])
             
             # Configure safety settings
             safety_settings = {

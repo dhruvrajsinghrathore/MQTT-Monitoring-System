@@ -30,8 +30,13 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose, context, pageType = 
   const [isTyping, setIsTyping] = useState(false);
   const [width, setWidth] = useState(Math.floor(window.innerWidth * 0.3)); // Default 30% of screen width
   const [isResizing, setIsResizing] = useState(false);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [selectedSuggestionIndex, setSelectedSuggestionIndex] = useState(-1);
+  const [suggestionStartPos, setSuggestionStartPos] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const chatBotRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   const scrollToBottom = () => {
     if (messagesEndRef.current) {
@@ -51,11 +56,143 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose, context, pageType = 
     }
   };
 
+  const parseReferences = (text: string) => {
+    // Parse @ references in the text
+    const referenceRegex = /@([a-zA-Z0-9_\s]+)/g;
+    const references: string[] = [];
+    let match;
+    
+    while ((match = referenceRegex.exec(text)) !== null) {
+      const reference = match[1].trim();
+      if (reference && !references.includes(reference)) {
+        references.push(reference);
+      }
+    }
+    
+    return references;
+  };
+
+  const getAvailableSensors = () => {
+    // Common sensor names that are typically available
+    const commonSensors = [
+      'glucose mM', 'pH', 'o2 percent', 'pressure mbar', 'flow uL_min',
+      'hcs ROS_AU', 'hcs ROS_IU', 'hcs viability_pct', 'hcs Ca_ratio',
+      'aptamer IL6_nM', 'aptamer TNFa_nM', 'barrier impedance_kOhm',
+      'qpi cell_count', 'qpi confluence_pct', 'qpi dry_mass_pg',
+      'tumor EMT_index', 'tumor prolif_index'
+    ];
+    
+    // If we're on equipment page, we could fetch actual available sensors
+    // For now, return common sensors
+    return commonSensors;
+  };
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    setInputText(value);
+    
+    // Check for @ symbol and show suggestions
+    const cursorPos = e.target.selectionStart || 0;
+    const textBeforeCursor = value.substring(0, cursorPos);
+    const lastAtIndex = textBeforeCursor.lastIndexOf('@');
+    
+    if (lastAtIndex !== -1) {
+      const textAfterAt = textBeforeCursor.substring(lastAtIndex + 1);
+      const hasSpaceAfterAt = textAfterAt.includes(' ');
+      
+      if (!hasSpaceAfterAt) {
+        // Show suggestions
+        const availableSensors = getAvailableSensors();
+        const filteredSuggestions = availableSensors.filter(sensor => 
+          sensor.toLowerCase().includes(textAfterAt.toLowerCase())
+        );
+        
+        setSuggestions(filteredSuggestions);
+        setSuggestionStartPos(lastAtIndex);
+        setShowSuggestions(filteredSuggestions.length > 0);
+        setSelectedSuggestionIndex(-1);
+      } else {
+        setShowSuggestions(false);
+      }
+    } else {
+      setShowSuggestions(false);
+    }
+  };
+
+  const insertSuggestion = (suggestion: string) => {
+    const beforeAt = inputText.substring(0, suggestionStartPos);
+    const afterCursor = inputText.substring(inputRef.current?.selectionStart || 0);
+    const newText = beforeAt + '@' + suggestion + ' ' + afterCursor;
+    
+    setInputText(newText);
+    setShowSuggestions(false);
+    
+    // Focus back to input
+    setTimeout(() => {
+      if (inputRef.current) {
+        const newCursorPos = beforeAt.length + suggestion.length + 2; // +2 for @ and space
+        inputRef.current.focus();
+        inputRef.current.setSelectionRange(newCursorPos, newCursorPos);
+      }
+    }, 0);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (showSuggestions) {
+      switch (e.key) {
+        case 'ArrowDown':
+          e.preventDefault();
+          setSelectedSuggestionIndex(prev => 
+            prev < suggestions.length - 1 ? prev + 1 : prev
+          );
+          break;
+        case 'ArrowUp':
+          e.preventDefault();
+          setSelectedSuggestionIndex(prev => prev > 0 ? prev - 1 : -1);
+          break;
+        case 'Enter':
+          if (selectedSuggestionIndex >= 0) {
+            e.preventDefault();
+            insertSuggestion(suggestions[selectedSuggestionIndex]);
+          } else if (!e.shiftKey) {
+            e.preventDefault();
+            handleSendMessage();
+          }
+          break;
+        case 'Escape':
+          setShowSuggestions(false);
+          break;
+      }
+    } else if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSendMessage();
+    }
+  };
+
   const formatResponse = (text: string, isUserMessage: boolean = false) => {
     // Simple formatting - just split by lines and format based on content
     const lines = text.split('\n').map(line => line.trim()).filter(line => line.length > 0);
     
     return lines.map((line, index) => {
+      // Highlight @ references in user messages
+      if (isUserMessage && line.includes('@')) {
+        const parts = line.split(/(@[a-zA-Z0-9_\s]+)/g);
+        return (
+          <div key={index} className={`mb-1 ${isUserMessage ? 'text-white' : 'text-gray-700'}`}>
+            {parts.map((part, partIndex) => {
+              if (part.startsWith('@')) {
+                return (
+                  <span key={partIndex} className="bg-blue-600 text-white px-1 rounded text-sm font-medium">
+                    {part}
+                  </span>
+                );
+              }
+              return part;
+            })}
+          </div>
+        );
+      }
+      
       // Main headings (ALL CAPS ending with colon)
       if (line.match(/^[A-Z][A-Z\s]+:$/)) {
         return (
@@ -151,6 +288,9 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose, context, pageType = 
     setIsTyping(true);
 
     try {
+      // Parse @ references from the user query
+      const references = parseReferences(currentQuery);
+      
       // Call backend LLM service
       const response = await fetch(getApiUrl('/api/chatbot/query'), {
         method: 'POST',
@@ -160,7 +300,8 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose, context, pageType = 
         body: JSON.stringify({
           query: currentQuery,
           page_type: pageType,
-          cell_id: cellId
+          cell_id: cellId,
+          references: references // Send parsed references to backend
         })
       });
 
@@ -192,12 +333,6 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose, context, pageType = 
     }
   };
 
-  const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSendMessage();
-    }
-  };
 
   if (!isOpen) return null;
 
@@ -298,17 +433,40 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose, context, pageType = 
       </div>
 
       {/* Input - Fixed at bottom */}
-      <div className="border-t border-gray-200 p-4 flex-shrink-0">
+      <div className="border-t border-gray-200 p-4 flex-shrink-0 relative">
         <div className="flex space-x-2">
-          <input
-            type="text"
-            value={inputText}
-            onChange={(e) => setInputText(e.target.value)}
-            onKeyPress={handleKeyPress}
-            placeholder="Ask me about your cell data..."
-            className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            disabled={isTyping}
-          />
+          <div className="flex-1 relative">
+            <input
+              ref={inputRef}
+              type="text"
+              value={inputText}
+              onChange={handleInputChange}
+              onKeyDown={handleKeyDown}
+              placeholder="Ask me about your cell data..."
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              disabled={isTyping}
+            />
+            
+            {/* Suggestions Dropdown */}
+            {showSuggestions && suggestions.length > 0 && (
+              <div className="absolute bottom-full left-0 right-0 mb-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto z-50">
+                {suggestions.map((suggestion, index) => (
+                  <div
+                    key={suggestion}
+                    className={`px-3 py-2 cursor-pointer text-sm ${
+                      index === selectedSuggestionIndex
+                        ? 'bg-blue-100 text-blue-800'
+                        : 'hover:bg-gray-100'
+                    }`}
+                    onClick={() => insertSuggestion(suggestion)}
+                  >
+                    <span className="text-blue-600 font-medium">@</span>
+                    {suggestion}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
           <button
             onClick={handleSendMessage}
             disabled={!inputText.trim() || isTyping}

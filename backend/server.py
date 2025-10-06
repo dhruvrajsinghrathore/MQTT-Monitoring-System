@@ -777,18 +777,20 @@ async def chatbot_query(request: dict):
         user_query = request.get('query', '')
         page_type = request.get('page_type', 'monitor')  # 'monitor' or 'equipment'
         cell_id = request.get('cell_id', None)
+        references = request.get('references', [])  # Get @ references from frontend
         
         if not user_query:
             raise HTTPException(status_code=400, detail="Query is required")
         
-        # Process query with LLM
-        response = await llm_service.process_query(user_query, page_type, cell_id)
+        # Process query with LLM (now includes references)
+        response = await llm_service.process_query(user_query, page_type, cell_id, references)
         
         return {
             "response": response,
             "timestamp": datetime.now().isoformat(),
             "page_type": page_type,
-            "cell_id": cell_id
+            "cell_id": cell_id,
+            "references": references
         }
         
     except Exception as e:
