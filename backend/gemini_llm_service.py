@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Gemini LLM Service for MQTT Chatbot
-Provides intelligent responses based on cell data and context
+Provides intelligent responses based on real-time TDengine data
 """
 
 import json
@@ -11,6 +11,11 @@ from typing import Dict, List, Optional, Any
 from datetime import datetime
 import google.generativeai as genai
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
+from dotenv import load_dotenv
+from tdengine_service import tdengine_service
+
+# Load environment variables
+load_dotenv()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -44,187 +49,173 @@ class GeminiLLMService:
         if self.model is None:
             logger.error("Failed to initialize any Gemini model")
         
-        # Load cell data
-        self.cell_readings = self._load_cell_readings()
-        self.cell_details = self._load_cell_details()
+        # Initialize TDengine service for real-time data
+        self.tdengine = tdengine_service
         
         # Debug logging
-        logger.info(f"Loaded {len(self.cell_readings.get('cells', {}))} cells from readings")
-        logger.info(f"Loaded {len(self.cell_details.get('cells', {}))} cells from details")
+        available_cells = self.tdengine.get_available_cells()
+        logger.info(f"TDengine connection established. Available cells: {available_cells}")
         
-        logger.info("Gemini LLM Service initialized")
+        logger.info("Gemini LLM Service initialized with TDengine integration")
     
-    def _load_cell_readings(self) -> Dict[str, Any]:
-        """Load current cell readings from JSON file"""
-        try:
-            # Get the directory where this script is located
-            script_dir = os.path.dirname(os.path.abspath(__file__))
-            file_path = os.path.join(script_dir, 'data', 'cell_readings.json')
-            with open(file_path, 'r') as f:
-                return json.load(f)
-        except Exception as e:
-            logger.error(f"Failed to load cell readings: {e}")
-            return {}
-    
-    def _load_cell_details(self) -> Dict[str, Any]:
-        """Load cell details from JSON file"""
-        try:
-            # Get the directory where this script is located
-            script_dir = os.path.dirname(os.path.abspath(__file__))
-            file_path = os.path.join(script_dir, 'data', 'cell_details.json')
-            with open(file_path, 'r') as f:
-                return json.load(f)
-        except Exception as e:
-            logger.error(f"Failed to load cell details: {e}")
-            return {}
-    
-    def _build_monitor_context(self) -> str:
-        """Build context for monitor page queries"""
-        context = f"""
-# MQTT Cell Monitoring System Context
-
-## Project Information
-- Project: {self.cell_details.get('project_name', 'Unknown')}
-- Description: {self.cell_details.get('description', 'Unknown')}
-- Timestamp: {self.cell_readings.get('timestamp', 'Unknown')}
-
-## Active Cells Overview
-"""
+    def _build_monitor_context(self, user_query: str = "", references: List[str] = None) -> str:
+        """Build context for monitor page queries - SIMPLIFIED VERSION"""
+        available_cells = self.tdengine.get_available_cells()
         
-        for cell_id, cell_data in self.cell_readings.get('cells', {}).items():
-            cell_info = self.cell_details.get('cells', {}).get(cell_id, {})
-            context += f"""
-### {cell_id.upper()}
-- Name: {cell_info.get('name', 'Unknown')}
-- Status: {cell_data.get('status', 'Unknown')}
-- Location: {cell_info.get('location', 'Unknown')}
-- Last Updated: {cell_data.get('last_updated', 'Unknown')}
-
-#### Current Sensor Readings:
-"""
-            for sensor_name, sensor_data in cell_data.get('sensors', {}).items():
-                sensor_desc = self.cell_details.get('sensor_descriptions', {}).get(sensor_name, {})
-                context += f"- {sensor_desc.get('name', sensor_name)}: {sensor_data.get('value')} {sensor_data.get('unit')} (Range: {sensor_data.get('min_val')}-{sensor_data.get('max_val')})\n"
+        # Extract query parameters
+        query_cell_ids = self.tdengine.extract_cell_ids_from_query(user_query)
+        referenced_features = self.tdengine.extract_referenced_features(user_query, references or [])
+        time_range = self.tdengine.extract_time_range_from_query(user_query)
         
-        context += """
-## Sensor Descriptions
-"""
-        for sensor_name, sensor_info in self.cell_details.get('sensor_descriptions', {}).items():
-            context += f"""
-- {sensor_info.get('name', sensor_name)}: {sensor_info.get('description', 'No description')}
-  - Unit: {sensor_info.get('unit', 'Unknown')}
-  - Normal Range: {sensor_info.get('normal_range', 'Unknown')}
-  - Measurement Method: {sensor_info.get('measurement_method', 'Unknown')}
-"""
+        context = ""
+        
+        # SIMPLE HISTORICAL DATA DETECTION
+        is_trend_query = any(word in user_query.lower() for word in ['trend', 'pattern', 'day', 'week', 'month', 'past', 'ago', 'over time', 'change'])
+        
+        if is_trend_query and referenced_features and query_cell_ids:
+            # Handle multiple cells for comparison
+            if len(query_cell_ids) > 1:
+                # Multi-cell comparison
+                context += f"HISTORICAL TREND COMPARISON:\n"
+                for cell_id in query_cell_ids:
+                    sensor_name = referenced_features[0]  # Use first sensor for now
+                    trend_summary = self.tdengine.get_simple_trend_summary(cell_id, sensor_name, time_range)
+                    
+                    if trend_summary.get("status") == "success":
+                        context += f"\n{cell_id.upper()}:\n"
+                        context += f"- Sensor: {trend_summary['sensor_name']}\n"
+                        context += f"- Time Period: {trend_summary['time_range']}\n"
+                        context += f"- Data Points: {trend_summary['data_points']}\n"
+                        context += f"- Start Value: {trend_summary['first_value']} {trend_summary['unit']}\n"
+                        context += f"- End Value: {trend_summary['last_value']} {trend_summary['unit']}\n"
+                        context += f"- Min Value: {trend_summary['min_value']} {trend_summary['unit']}\n"
+                        context += f"- Max Value: {trend_summary['max_value']} {trend_summary['unit']}\n"
+                        context += f"- Average Value: {trend_summary['avg_value']} {trend_summary['unit']}\n"
+                        context += f"- Trend: {trend_summary['trend_direction']}\n"
+                        context += f"- Change: {trend_summary['change_percent']}%\n"
+                        context += f"- Period: {trend_summary['start_time']} to {trend_summary['end_time']}\n"
+                    elif trend_summary.get("status") == "insufficient_data":
+                        context += f"\n{cell_id.upper()}: Only 1 data point available for {sensor_name} in {time_range}\n"
+                    elif trend_summary.get("status") == "no_data":
+                        context += f"\n{cell_id.upper()}: No data found for {sensor_name} in {time_range}\n"
+                context += "\n"
+            else:
+                # Single cell analysis
+                cell_id = query_cell_ids[0]
+                sensor_name = referenced_features[0]
+                
+                trend_summary = self.tdengine.get_simple_trend_summary(cell_id, sensor_name, time_range)
+                
+                if trend_summary.get("status") == "success":
+                    context += f"HISTORICAL TREND ANALYSIS:\n"
+                    context += f"Cell: {trend_summary['cell_id']}\n"
+                    context += f"Sensor: {trend_summary['sensor_name']}\n"
+                    context += f"Time Period: {trend_summary['time_range']}\n"
+                    context += f"Data Points: {trend_summary['data_points']}\n"
+                    context += f"Start Value: {trend_summary['first_value']} {trend_summary['unit']}\n"
+                    context += f"End Value: {trend_summary['last_value']} {trend_summary['unit']}\n"
+                    context += f"Min Value: {trend_summary['min_value']} {trend_summary['unit']}\n"
+                    context += f"Max Value: {trend_summary['max_value']} {trend_summary['unit']}\n"
+                    context += f"Average Value: {trend_summary['avg_value']} {trend_summary['unit']}\n"
+                    context += f"Trend: {trend_summary['trend_direction']}\n"
+                    context += f"Change: {trend_summary['change_percent']}%\n"
+                    context += f"Period: {trend_summary['start_time']} to {trend_summary['end_time']}\n\n"
+                elif trend_summary.get("status") == "insufficient_data":
+                    context += f"HISTORICAL DATA: Only 1 data point available for {cell_id} {sensor_name} in {time_range}\n\n"
+                elif trend_summary.get("status") == "no_data":
+                    context += f"HISTORICAL DATA: No data found for {cell_id} {sensor_name} in {time_range}\n\n"
+        
+        # Add current real-time data
+        context += f"CURRENT REAL-TIME DATA:\n"
+        if query_cell_ids:
+            if len(query_cell_ids) > 1:
+                # Multi-cell current data
+                for cell_id in query_cell_ids:
+                    latest_data = self.tdengine.get_latest_readings(cell_id)
+                    if latest_data and latest_data.get('sensors'):
+                        context += f"\n{cell_id.upper()}:\n"
+                        if referenced_features:
+                            for sensor_name in referenced_features:
+                                if sensor_name in latest_data['sensors']:
+                                    sensor_data = latest_data['sensors'][sensor_name]
+                                    context += f"- {sensor_name}: {sensor_data['value']} {sensor_data['unit']}\n"
+                        else:
+                            for sensor_name, sensor_data in latest_data['sensors'].items():
+                                context += f"- {sensor_name}: {sensor_data['value']} {sensor_data['unit']}\n"
+            else:
+                # Single cell current data
+                cell_id = query_cell_ids[0]
+                latest_data = self.tdengine.get_latest_readings(cell_id)
+                if latest_data and latest_data.get('sensors'):
+                    context += f"Cell: {cell_id}\n"
+                    if referenced_features:
+                        for sensor_name in referenced_features:
+                            if sensor_name in latest_data['sensors']:
+                                sensor_data = latest_data['sensors'][sensor_name]
+                                context += f"- {sensor_name}: {sensor_data['value']} {sensor_data['unit']}\n"
+                    else:
+                        for sensor_name, sensor_data in latest_data['sensors'].items():
+                            context += f"- {sensor_name}: {sensor_data['value']} {sensor_data['unit']}\n"
+        else:
+            context += "No specific cell mentioned in query\n"
         
         return context
     
     def _build_equipment_context(self, cell_id: str) -> str:
-        """Build context for equipment detail page queries"""
-        cell_data = self.cell_readings.get('cells', {}).get(cell_id, {})
-        cell_info = self.cell_details.get('cells', {}).get(cell_id, {})
+        """Build context for equipment detail page queries using real-time TDengine data"""
+        # Get real-time data from TDengine
+        cell_data = self.tdengine.get_latest_readings(cell_id)
         
         if not cell_data:
-            return f"No data found for {cell_id}"
+            return f"No real-time data found for {cell_id}"
         
         context = f"""
 # {cell_id.upper()} Equipment Detail Context
 
 ## Cell Information
-- Name: {cell_info.get('name', 'Unknown')}
-- Description: {cell_info.get('description', 'Unknown')}
 - Status: {cell_data.get('status', 'Unknown')}
-- Location: {cell_info.get('location', 'Unknown')}
 - Last Updated: {cell_data.get('last_updated', 'Unknown')}
-- Last Maintenance: {cell_info.get('last_maintenance', 'Unknown')}
 
-## Current Sensor Readings
+## Current Sensor Readings (Real-time)
 """
         
-        for sensor_name, sensor_data in cell_data.get('sensors', {}).items():
-            sensor_desc = self.cell_details.get('sensor_descriptions', {}).get(sensor_name, {})
+        sensors = cell_data.get('sensors', {})
+        for sensor_name, sensor_data in sensors.items():
             context += f"""
-### {sensor_desc.get('name', sensor_name)}
+### {sensor_name}
 - Current Value: {sensor_data.get('value')} {sensor_data.get('unit')}
 - Range: {sensor_data.get('min_val')} - {sensor_data.get('max_val')}
-- Normal Range: {sensor_desc.get('normal_range', 'Unknown')}
+- Unit: {sensor_data.get('unit')}
+- Sensor Type: {sensor_data.get('sensor_type', 'Unknown')}
 - Status: {sensor_data.get('status', 'Unknown')}
 - Timestamp: {sensor_data.get('timestamp', 'Unknown')}
-- Description: {sensor_desc.get('description', 'No description')}
-- Measurement Method: {sensor_desc.get('measurement_method', 'Unknown')}
 """
         
         context += f"""
-## Operational Ranges
-{json.dumps(cell_info.get('operational_ranges', {}), indent=2)}
-
-## Alert Thresholds
-Critical Alerts: {', '.join(cell_info.get('alerts', {}).get('critical', []))}
-Warning Alerts: {', '.join(cell_info.get('alerts', {}).get('warning', []))}
+## Notes
+- All data is retrieved from TDengine database in real-time
+- Data is collected from active sensors
 """
         
         return context
     
     def _build_prompt(self, user_query: str, page_type: str, cell_id: Optional[str] = None, references: List[str] = None) -> str:
-        """Build the complete prompt for Gemini"""
+        """Build the complete prompt for Gemini - SIMPLIFIED VERSION"""
         
         if page_type == "monitor":
-            context = self._build_monitor_context()
-            page_context = "monitoring dashboard showing all active cells"
+            context = self._build_monitor_context(user_query, references)
         elif page_type == "equipment" and cell_id:
             context = self._build_equipment_context(cell_id)
-            page_context = f"equipment detail page for {cell_id}"
         else:
-            context = self._build_monitor_context()
-            page_context = "monitoring dashboard"
+            context = self._build_monitor_context(user_query, references)
         
-        # Build reference context if references are provided
-        reference_context = ""
-        if references:
-            reference_context = f"""
-## Referenced Data Points
-The user has referenced these specific data points using @ symbols: {', '.join(references)}
-Please pay special attention to these data points in your response and provide detailed information about them.
-"""
-        
-        prompt = f"""
-You are an AI assistant for an MQTT-based cell monitoring system. You help users understand their cell culture data, sensor readings, and system status.
+        # ULTRA SIMPLIFIED PROMPT - Put historical data first
+        prompt = f"""Answer this question: {user_query}
 
-## Current Context
-You are currently on the {page_context}. Here's the relevant data:
-
+HISTORICAL DATA AVAILABLE:
 {context}
-{reference_context}
-## User Query
-{user_query}
 
-## Instructions
-1. Provide a helpful, accurate response based on the data above
-2. If asked about specific cells or sensors, reference the actual values
-3. If values are outside normal ranges, mention this
-4. If asked about trends, explain that this is current data (historical trends would need additional data)
-5. Be conversational but informative
-6. If you don't have enough information, say so
-7. Focus on the biological/technical significance of the readings
-8. If the user referenced specific data points with @ symbols, focus your response on those data points
-9. **IMPORTANT: When referencing data points mentioned with @ symbols, use the exact names provided by the user**
-10. **FORMATTING: Use simple, clean formatting like a normal chat response:**
-   - Use headings with CAPS (e.g., "CELL STATUS SUMMARY:")
-   - Use cell names like "CELL1:" or "CELL2:" for each cell section
-   - Use property names like "Status:", "Location:", "Sensor Readings:" for subsections
-   - **IMPORTANT: Add line breaks between each piece of information**
-   - **IMPORTANT: Format sensor readings as "Sensor Name: value unit (range)" on separate lines**
-   - Keep it simple and readable like a normal chat response
-   - **CRITICAL: NO markdown symbols like #, **, *, or any special formatting characters**
-   - **CRITICAL: NO bold text, NO asterisks, NO hashtags - just clean text with line breaks**
-
-## Response Guidelines
-- Use clear, professional language
-- Include specific values when relevant
-- Explain what the readings mean biologically
-- Suggest actions if there are concerning values
-- Keep responses concise but comprehensive
-"""
+ANSWER:"""
         
         return prompt
     
@@ -285,18 +276,16 @@ You are currently on the {page_context}. Here's the relevant data:
             return f"I apologize, but I encountered an error processing your query: {str(e)}. Please try again or check the system status."
     
     def get_available_cells(self) -> List[str]:
-        """Get list of available cell IDs"""
-        return list(self.cell_readings.get('cells', {}).keys())
+        """Get list of available cell IDs from TDengine"""
+        return self.tdengine.get_available_cells()
     
     def get_cell_status(self, cell_id: str) -> Optional[Dict[str, Any]]:
-        """Get status of a specific cell"""
-        return self.cell_readings.get('cells', {}).get(cell_id)
+        """Get status of a specific cell from TDengine"""
+        return self.tdengine.get_latest_readings(cell_id)
     
     def refresh_data(self):
-        """Refresh cell data from JSON files"""
-        self.cell_readings = self._load_cell_readings()
-        self.cell_details = self._load_cell_details()
-        logger.info("Cell data refreshed")
+        """Refresh cell data from TDengine (no-op since we query real-time)"""
+        logger.info("TDengine data is queried in real-time - no refresh needed")
 
 # Global instance
 llm_service = GeminiLLMService()

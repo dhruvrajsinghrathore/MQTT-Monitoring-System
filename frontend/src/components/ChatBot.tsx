@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { X, Send, Bot, User, GripVertical } from 'lucide-react';
+import { X, Send, Bot, User, Plus, Trash2, MessageSquare } from 'lucide-react';
 import { getApiUrl } from '../config/api';
 
 interface ChatMessage {
@@ -7,6 +7,14 @@ interface ChatMessage {
   text: string;
   sender: 'user' | 'bot';
   timestamp: Date;
+}
+
+interface ChatSession {
+  id: string;
+  name: string;
+  messages: ChatMessage[];
+  createdAt: Date;
+  lastUpdated: Date;
 }
 
 interface ChatBotProps {
@@ -17,15 +25,14 @@ interface ChatBotProps {
   cellId?: string; // Cell ID for equipment page
 }
 
+const STORAGE_KEY = 'mqtt-chat-sessions';
+const MAX_SESSIONS = 10;
+
 const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose, context, pageType = 'monitor', cellId }) => {
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      id: '1',
-      text: `Hello! I'm your AI-powered MQTT monitoring assistant. I can help you analyze your cell data, understand sensor readings, and provide insights about your equipment. ${context ? `I can see you're currently viewing ${context}.` : ''} How can I assist you today?`,
-      sender: 'bot',
-      timestamp: new Date()
-    }
-  ]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [showSessionList, setShowSessionList] = useState(false);
   const [inputText, setInputText] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const [width, setWidth] = useState(Math.floor(window.innerWidth * 0.3)); // Default 30% of screen width
@@ -37,6 +44,147 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose, context, pageType = 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const chatBotRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Load sessions from localStorage
+  const loadSessions = (): ChatSession[] => {
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        return parsed.map((s: any) => ({
+          ...s,
+          messages: s.messages.map((m: any) => ({
+            ...m,
+            timestamp: new Date(m.timestamp)
+          })),
+          createdAt: new Date(s.createdAt),
+          lastUpdated: new Date(s.lastUpdated)
+        }));
+      }
+    } catch (error) {
+      console.error('Error loading sessions:', error);
+    }
+    return [];
+  };
+
+  // Save sessions to localStorage
+  const saveSessions = (sessions: ChatSession[]) => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions));
+    } catch (error) {
+      console.error('Error saving sessions:', error);
+    }
+  };
+
+  // Initialize with existing session or create new one
+  useEffect(() => {
+    if (isOpen) {
+      const loadedSessions = loadSessions();
+      setSessions(loadedSessions);
+      
+      // Try to restore the last active session or most recent
+      if (loadedSessions.length > 0) {
+        const lastSession = loadedSessions.sort((a, b) => 
+          new Date(b.lastUpdated).getTime() - new Date(a.lastUpdated).getTime()
+        )[0];
+        setCurrentSessionId(lastSession.id);
+        setMessages(lastSession.messages);
+      } else {
+        // Create a new session
+        const sessionId = Date.now().toString();
+        const firstMessage: ChatMessage = {
+          id: '1',
+          text: `Hello! I'm your AI-powered MQTT monitoring assistant. I can help you analyze your cell data, understand sensor readings, and provide insights about your equipment. ${context ? `I can see you're currently viewing ${context}.` : ''} How can I assist you today?`,
+          sender: 'bot',
+          timestamp: new Date()
+        };
+
+        const newSession: ChatSession = {
+          id: sessionId,
+          name: `Chat ${sessionId.slice(-6)}`,
+          messages: [firstMessage],
+          createdAt: new Date(),
+          lastUpdated: new Date()
+        };
+
+        const updatedSessions = [newSession, ...loadedSessions].slice(0, MAX_SESSIONS);
+        setSessions(updatedSessions);
+        setCurrentSessionId(sessionId);
+        setMessages([firstMessage]);
+        saveSessions(updatedSessions);
+      }
+    }
+  }, [isOpen, context]);
+
+  // Save messages when they change
+  useEffect(() => {
+    if (currentSessionId && messages.length > 0) {
+      updateSession(currentSessionId, messages);
+    }
+  }, [messages, currentSessionId]);
+
+  const createNewSession = (existingSessions: ChatSession[] = sessions) => {
+    const sessionId = Date.now().toString();
+    const firstMessage: ChatMessage = {
+      id: '1',
+      text: `Hello! I'm your AI-powered MQTT monitoring assistant. I can help you analyze your cell data, understand sensor readings, and provide insights about your equipment. ${context ? `I can see you're currently viewing ${context}.` : ''} How can I assist you today?`,
+      sender: 'bot',
+      timestamp: new Date()
+    };
+
+    const newSession: ChatSession = {
+      id: sessionId,
+      name: `Chat ${sessionId.slice(-6)}`,
+      messages: [firstMessage],
+      createdAt: new Date(),
+      lastUpdated: new Date()
+    };
+
+    const updatedSessions = [newSession, ...existingSessions].slice(0, MAX_SESSIONS);
+    setSessions(updatedSessions);
+    setCurrentSessionId(sessionId);
+    setMessages([firstMessage]);
+    saveSessions(updatedSessions);
+  };
+
+  const updateSession = (sessionId: string, newMessages: ChatMessage[]) => {
+    const updatedSessions = sessions.map(s => {
+      if (s.id === sessionId) {
+        return {
+          ...s,
+          messages: newMessages,
+          lastUpdated: new Date()
+        };
+      }
+      return s;
+    });
+    setSessions(updatedSessions);
+    saveSessions(updatedSessions);
+  };
+
+  const loadSession = (sessionId: string) => {
+    const session = sessions.find(s => s.id === sessionId);
+    if (session) {
+      setCurrentSessionId(sessionId);
+      setMessages(session.messages);
+      setShowSessionList(false);
+    }
+  };
+
+  const deleteSession = (sessionId: string) => {
+    const updatedSessions = sessions.filter(s => s.id !== sessionId);
+    setSessions(updatedSessions);
+    saveSessions(updatedSessions);
+    
+    if (currentSessionId === sessionId) {
+      // Load another session or create new one
+      if (updatedSessions.length > 0) {
+        loadSession(updatedSessions[0].id);
+      } else {
+        createNewSession([]);
+      }
+    }
+  };
 
   const scrollToBottom = () => {
     if (messagesEndRef.current) {
@@ -351,9 +499,25 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose, context, pageType = 
       </div>
       {/* Header */}
       <div className="bg-blue-600 text-white p-4 flex items-center justify-between flex-shrink-0">
-        <div className="flex items-center space-x-2">
+        <div className="flex items-center space-x-3">
           <Bot className="w-5 h-5" />
           <h3 className="font-semibold">AI MQTT Assistant</h3>
+          <button
+            onClick={() => createNewSession()}
+            className="text-white hover:text-blue-200 transition-colors flex items-center space-x-1"
+            title="New Chat"
+          >
+            <Plus className="w-4 h-4" />
+            <span className="text-sm">New</span>
+          </button>
+          <button
+            onClick={() => setShowSessionList(!showSessionList)}
+            className="text-white hover:text-blue-200 transition-colors flex items-center space-x-1"
+            title="Chat History"
+          >
+            <MessageSquare className="w-4 h-4" />
+            <span className="text-sm">History</span>
+          </button>
         </div>
         <button
           onClick={onClose}
@@ -362,6 +526,41 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose, context, pageType = 
           <X className="w-5 h-5" />
         </button>
       </div>
+
+      {/* Session List */}
+      {showSessionList && (
+        <div className="absolute top-16 left-0 right-0 z-50 bg-white border border-gray-200 shadow-lg max-h-96 overflow-y-auto">
+          <div className="p-3 border-b border-gray-200">
+            <h4 className="font-semibold text-gray-800">Chat History</h4>
+          </div>
+          {sessions.map((session) => (
+            <div
+              key={session.id}
+              className={`flex items-center justify-between p-3 hover:bg-gray-50 cursor-pointer border-b border-gray-100 ${
+                currentSessionId === session.id ? 'bg-blue-50' : ''
+              }`}
+              onClick={() => loadSession(session.id)}
+            >
+              <div className="flex-1">
+                <div className="font-medium text-gray-800">{session.name}</div>
+                <div className="text-sm text-gray-500">
+                  {session.messages.length - 1} messages • {new Date(session.lastUpdated).toLocaleString()}
+                </div>
+              </div>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  deleteSession(session.id);
+                }}
+                className="text-red-500 hover:text-red-700 p-1"
+                title="Delete session"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Messages - Fixed height with scroll */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4 min-h-0">
