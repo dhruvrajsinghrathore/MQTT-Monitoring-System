@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """
-WSGI entry point for production deployment
+WSGI/ASGI entry point for production deployment
+Exports FastAPI app for use with Gunicorn + Uvicorn workers
 """
 
-from server import app, socketio
+from server import app
 
+# For Gunicorn: gunicorn -k uvicorn.workers.UvicornWorker wsgi:app
+# For direct run: python wsgi.py
 if __name__ == "__main__":
-    socketio.run(app, host='0.0.0.0', port=8000, debug=False) 
+    import uvicorn
+    uvicorn.run(app, host='0.0.0.0', port=8000) 

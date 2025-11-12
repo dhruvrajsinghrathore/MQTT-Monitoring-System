@@ -78,11 +78,11 @@ class GraphDataManager:
         """Update sensor data for a specific equipment and sensor type"""
         # Only process equipment that exists in the project's graph layout
         if equipment_id not in self.sensor_data:
-            logger.info(f"🔍 Equipment {equipment_id} not in sensor_data, checking if it's in graph layout")
+            logger.debug(f"🔍 Equipment {equipment_id} not in sensor_data, checking if it's in graph layout")
             
             # Check if this equipment is in the project's graph layout
             if not self.project or not self.project.get('graph_layout', {}).get('nodes'):
-                logger.info(f"🔍 No project or graph layout, skipping {equipment_id}")
+                logger.debug(f"🔍 No project or graph layout, skipping {equipment_id}")
                 return  # No project or no graph layout, skip
             
             # Check if this equipment_id is in the graph layout
@@ -92,10 +92,10 @@ class GraphDataManager:
             )
             
             if not equipment_in_layout:
-                logger.info(f"🔍 Equipment {equipment_id} not in graph layout, skipping")
+                logger.debug(f"🔍 Equipment {equipment_id} not in graph layout, skipping")
                 return  # Equipment not in graph layout, skip
             
-            logger.info(f"🔍 Equipment {equipment_id} is in graph layout, creating node")
+            logger.debug(f"🔍 Equipment {equipment_id} is in graph layout, creating node")
             
             # Find the original node data from the graph layout
             original_node = next(
@@ -153,7 +153,7 @@ class GraphDataManager:
         if self.project and self.project.get('graph_layout', {}).get('edges'):
             edges = self.project['graph_layout']['edges']
         
-        logger.info(f"🔍 GraphDataManager sending {len(nodes)} nodes: {[n['id'] for n in nodes]}")
+        logger.debug(f"🔍 GraphDataManager sending {len(nodes)} nodes: {[n['id'] for n in nodes]}")
         
         return {
             'nodes': nodes,
@@ -255,7 +255,7 @@ class MQTTDiscovery:
                         'last_seen': datetime.now().isoformat(),
                         'sample_data': payload
                     }
-                    logger.info(f"Discovered: {equipment_id} / {sensor_type} on topic {topic}")
+                    logger.debug(f"Discovered: {equipment_id} / {sensor_type} on topic {topic}")
             else:
                 logger.warning("AdaptiveSchemaLearner not available for discovery")
             
@@ -770,9 +770,9 @@ async def get_storage_stats():
 # Chatbot API Endpoints
 @app.post("/api/chatbot/query")
 async def chatbot_query(request: dict):
-    """Process chatbot query with LLM"""
+    """Process chatbot query with CrewAI"""
     try:
-        from gemini_llm_service import llm_service
+        from crewai_service import crewai_service
         
         user_query = request.get('query', '')
         page_type = request.get('page_type', 'monitor')  # 'monitor' or 'equipment'
@@ -782,8 +782,13 @@ async def chatbot_query(request: dict):
         if not user_query:
             raise HTTPException(status_code=400, detail="Query is required")
         
-        # Process query with LLM (now includes references)
-        response = await llm_service.process_query(user_query, page_type, cell_id, references)
+        # Process query with CrewAI
+        response = await crewai_service.process_query(
+            user_query=user_query,
+            page_type=page_type,
+            cell_id=cell_id,
+            references=references
+        )
         
         return {
             "response": response,
@@ -794,15 +799,33 @@ async def chatbot_query(request: dict):
         }
         
     except Exception as e:
-        logger.error(f"Chatbot query failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Query processing failed: {str(e)}")
+        error_msg = str(e)
+        logger.error(f"Chatbot query failed: {error_msg}")
+        
+        # Check if it's a quota/API error
+        if "429" in error_msg or "quota" in error_msg.lower() or "RESOURCE_EXHAUSTED" in error_msg:
+            user_message = (
+                "I apologize, but the AI service is currently experiencing quota limitations. "
+                "Please try again in a few minutes, or check your Gemini API quota at "
+                "https://ai.dev/usage?tab=rate-limit. "
+                "If this persists, you may need to upgrade your API plan or wait for quota reset."
+            )
+        elif "API" in error_msg or "api_key" in error_msg.lower():
+            user_message = (
+                "I apologize, but there's an issue with the AI service configuration. "
+                "Please check that your Gemini API key is valid and has available quota."
+            )
+        else:
+            user_message = f"I apologize, but I encountered an error processing your query: {error_msg[:200]}"
+        
+        raise HTTPException(status_code=500, detail=user_message)
 
 @app.get("/api/chatbot/cells")
 async def get_available_cells():
     """Get list of available cells for chatbot context"""
     try:
-        from gemini_llm_service import llm_service
-        cells = llm_service.get_available_cells()
+        from tdengine_service import tdengine_service
+        cells = tdengine_service.get_available_cells()
         return {"cells": cells, "count": len(cells)}
     except Exception as e:
         logger.error(f"Failed to get available cells: {e}")
