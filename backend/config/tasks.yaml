@@ -1,103 +1,123 @@
 data_extraction_task:
   description: |
-    Analyze the user query and extract relevant data from TDengine.
+    Analyze the user query and extract relevant data from the time-series database.
     
-    Steps:
-    0. FIRST: Extract cell IDs from the user query, then call get_tdengine_schema tool with those cell IDs to get schema information.
-       - Extract all cell mentions from query (handle variations: "cell1", "cell 1", "cell_1", "cell one", etc.)
-       - Normalize to "cell_N" format (e.g., "cell1" → "cell_1", "cell 2" → "cell_2")
-       - This provides table structure, columns, sensors, and metadata needed to generate correct SQL queries
+    Your goal is to understand what data the user needs and retrieve it efficiently using SQL queries.
     
-    1. Extract and normalize parameters:
-       - Cell IDs: Extract from query, handle all formats ("cell1", "cell 1", "cell_1", "cell one", "first cell", etc.) and normalize to "cell_N"
-       - Sensor names: Map @references to subtopic values using schema tool output, or discover sensor names from schema if mentioned in query
-       - Time period: Extract from query - handle all formats:
-         * Relative: "last X days/weeks/months/hours", "past X days", "X days ago"
-         * Absolute: "January 1st 2025", "1st Nov 2025", "2025-11-01", "Nov 1 to Nov 9 2025", "between X and Y"
-         * Relative points: "yesterday", "today", "this week", "this month"
-         * Default to last 24 hours if not specified
-       - Query intent: Determine if it's correlation, comparison, trend, current value, statistical analysis, etc.
+    Core Principles:
+    1. Understand query intent: Analyze the user's query to determine what they're asking for (statistics, comparisons, trends, correlations, current values, filtering/search)
+    2. Discover required information: Use schema tool to understand database structure, available tables, columns, and sensors
+    3. Extract parameters intelligently: Identify cells, sensors, time ranges, and filtering conditions from natural language
+    4. Generate optimized SQL: Write efficient queries that minimize data transfer and respect context limits
+    5. Return structured data: Format results in a consistent JSON structure for the next agent
     
-    2. Time period handling:
-       - ALWAYS include time filtering: ts >= 'YYYY-MM-DD HH:MM:SS' AND ts <= 'YYYY-MM-DD HH:MM:SS' (ISO format)
-       - Parse natural language dates and convert to ISO format for SQL
-       - For date ranges: Extract start and end dates, convert both to ISO format
-       - If no time specified: Default to last 24 hours (NOW() - 24 HOUR)
-       - Handle timezone considerations if mentioned
+    Process:
+    1. Schema Discovery:
+       - Determine which tables/cells are relevant based on query
+       - If specific cells mentioned: Get schema for those cells
+       - If no cells specified: Analyze if query requires searching across all cells
+       - For all-cell searches: FIRST use execute_tdengine_query("SHOW TABLES") to discover ALL available cell tables, then get schema for one representative cell to understand structure
+       - Get schema for minimal necessary cells (one representative cell if querying all)
     
-    3. Generate SQL queries:
+    2. Parameter Extraction:
+       - Extract and normalize cell identifiers from query (handle all formats)
+       - Map sensor references to actual database column values using schema
+       - Parse time periods from natural language (relative, absolute, relative points)
+       - Identify filtering conditions, thresholds, and comparison criteria
+       - Determine query intent based on user's question
+    
+    3. Time Period Handling:
+       - Parse time expressions and convert to database-compatible format
+       - Calculate time period length in days for optimization decisions
+       - Default to recent period if not specified
+       - If no data found, intelligently expand search range while preserving original request context
+    
+    4. SQL Query Generation (CRITICAL - Context Optimization):
        - Use schema information to identify correct tables and columns
-       - Tables: cell_N format (discover dynamically from schema)
-       - Columns: ts (timestamp), subtopic (sensor), reading (value), unit, sensor_type
-       - Always include time filtering in WHERE clause
-       - Support: JOINs, aggregations, WHERE conditions, date ranges, UNION ALL for multiple cells
-       - Order: ts DESC for latest, ts ASC for chronological
+       - Always include appropriate time filtering
+       - For queries requiring multiple/all cells: FIRST use execute_tdengine_query("SHOW TABLES") to discover ALL available cell tables, then use UNION ALL in single query with ALL discovered cells
+       - For "right now" or "current" queries: Ensure you get the absolute latest reading by using ORDER BY ts DESC LIMIT 1 per cell, and consider adding a time filter (e.g., last 1 hour) to ensure readings are recent
+       - For ALL time periods (including 24 hours): ALWAYS use SQL aggregation functions or time-based sampling to calculate statistics directly in database. NEVER fetch raw data points - they can cause context overflow even for short periods with many data points.
+       - EXCEPTION: For "current value" queries asking for latest reading across multiple cells: Fetch latest reading per cell (single value per cell is acceptable, but ensure it's truly the latest)
+       - For statistical queries: Use aggregation functions (AVG, STDDEV, MIN, MAX, PERCENTILE, COUNT) to calculate statistics directly
+       - For trend queries: Use time-based sampling (INTERVAL grouping) to get representative data points (e.g., INTERVAL(10m) for hourly trends, INTERVAL(1h) for daily trends)
+       - For correlation queries: Use time-bucketing (INTERVAL) to align sensors, then calculate correlation from bucketed data. Return ONLY correlation coefficient and statistics.
+       - For comparison queries: Use statistical aggregation per cell (mean, stddev, min, max) for comparison
+       - Apply filtering conditions uniformly across all relevant cells
+       - Use appropriate SQL functions: aggregations (AVG, STDDEV, MIN, MAX, COUNT, PERCENTILE), JOINs, WHERE conditions, UNION ALL, INTERVAL grouping
     
-    4. Statistical functions:
-       - Correlation: Manual formula (AVG(x*y) - AVG(x)*AVG(y)) / (STDDEV(x) * STDDEV(y)) - TDengine may not support CORR()
-       - Standard deviation: STDDEV(reading)
-       - Variance: VAR(reading) or STDDEV(reading)^2
-       - Covariance: AVG(x*y) - AVG(x)*AVG(y)
-       - Other functions: AVG (mean), MIN, MAX, COUNT, SUM, PERCENTILE (median/quartiles), FIRST, LAST, RANGE (MAX-MIN)
-       - Multi-cell statistical queries: If query asks for statistics "in cell1, cell2, cell5" (same sensor across multiple cells), calculate statistics PER CELL separately using UNION ALL, not combined. Return per-cell statistics in the statistics section.
-       - Multi-sensor/cell comparisons: For comparisons between different sensors/cells, use JOINs on timestamp to align data, then calculate statistics or compare values
-    
-    5. Data extraction strategy:
-       - Statistical queries (single or multiple cells): Calculate in SQL per cell if multiple cells, return only calculated values in statistics section (not raw data). Structure: {"cell_1": {"stddev": X, "mean": Y}, "cell_2": {...}}
-       - Comparison queries: Fetch time-aligned data points using JOINs on timestamp, return in data section. If no time period specified, default to 24 hours and fetch aligned points for that period
-       - Trend queries: Fetch historical points ordered chronologically, return in data section
-       - Current value: ORDER BY ts DESC LIMIT 1, return in data section under "current"
+    5. Data Extraction Strategy (CRITICAL - ALL queries use aggregation/sampling):
+       - Statistical queries: ALWAYS calculate statistics in SQL (AVG, STDDEV, MIN, MAX, PERCENTILE, COUNT), return aggregated values only. NEVER return raw data points.
+       - Comparison queries: ALWAYS use statistical aggregation per cell (mean, stddev, min, max, count) for comparison. NEVER return raw data points.
+       - Trend queries: ALWAYS use time-based sampling (INTERVAL grouping) to get representative data points. Use appropriate interval size (e.g., INTERVAL(10m) for 24h trends, INTERVAL(1h) for weekly trends). NEVER return all raw data points.
+       - Correlation queries: ALWAYS use time-bucketing (INTERVAL) to align sensors, calculate correlation from bucketed data, return ONLY correlation coefficient, covariance, and data_point_count. NEVER return raw or bucketed data points.
+       - Current value queries: Fetch latest reading (single value per cell is acceptable). For "right now" queries across multiple cells: Use SHOW TABLES to discover all cells, then get latest reading per cell with ORDER BY ts DESC LIMIT 1, and ensure readings are recent (consider adding time filter like ts >= NOW() - 1h to avoid stale data)
+       - Multi-cell queries: Calculate per-cell statistics separately using UNION ALL, include cell identifiers in results
+       - General rule: For ALL time periods (including 24 hours), use aggregation/sampling only, NO raw data points. This prevents context overflow even for short periods with many data points.
     
     6. Execute query using execute_tdengine_query tool
     
     7. Return structured JSON:
        {
-         "cells": ["cell_1", "cell_2", "cell_5", "cell_6"],
+         "cells": ["cell_1", "cell_2", ... "cell_N"],
          "sensors": ["sensor_name"],
-         "time_range": "description of time period used (e.g., 'November 1, 2025 to November 9, 2025')",
-         "query_intent": "correlation" | "comparison" | "trend" | "current" | "statistical",
-         "data": { /* time-aligned data points for comparisons/trends */ },
-         "statistics": { /* For multi-cell: {"cell_1": {"stddev": X, "mean": Y, ...}, "cell_2": {...}}, For single: {"stddev": X, "mean": Y, ...} */ },
-         "correlations": { /* correlation coefficients and covariance */ }
+         "time_range": "description of time period used",
+         "time_period_days": <number>,  // Original requested period in days
+         "query_intent": "<intent>",
+         "data": { /* Sampled data points (from INTERVAL grouping) for trend queries only, or single value for current queries. NEVER raw data points. */ },
+         "statistics": { /* Aggregated statistics - for statistical/comparison queries */ },
+         "correlations": { /* Correlation results - only for correlation queries (coefficient, covariance, data_point_count) */ }
        }
+       
+       Context Optimization Rules (CRITICAL - Apply to ALL time periods):
+       - For ALL query types and ALL time periods (including 24 hours): "data" section must be empty or omitted (use aggregation/sampling only)
+       - Statistical queries: Return aggregated values in "statistics" section (mean, stddev, min, max, median, count)
+       - Comparison queries: Return per-cell aggregated statistics in "statistics" section for comparison
+       - Trend queries: Return sampled data points in "data" section (from INTERVAL grouping, e.g., hourly/daily averages), NOT raw data points
+       - Correlation queries: Return ONLY correlation coefficient, covariance, and data_point_count in "correlations" section. Never return raw or bucketed data points.
+       - Current value queries: Return single latest value in "data" section (acceptable as single value)
+       - Always include "time_period_days" field
+       - Always include "data_point_count" in statistics and correlations to show how many points were aggregated
+       - If time range was expanded, mention both original and expanded in time_range description
   
-  expected_output: "Structured JSON with cells, sensors, time_range (always include, default 24h if unspecified), query_intent, and appropriate data/statistics/correlations sections. For multi-cell statistical queries, statistics should be per-cell."
+  expected_output: "Structured JSON with cells, sensors, time_range, time_period_days (original requested period), query_intent, and appropriate sections (data/statistics/correlations) based on query type. For ALL query types and ALL time periods (including 24 hours): Use aggregation/sampling only, NO raw data points. Statistical queries: Return aggregated statistics. Comparison queries: Return per-cell aggregated statistics. Trend queries: Return sampled data points (from INTERVAL grouping). Correlation queries: Return ONLY correlation coefficient, covariance, data_point_count. Always calculate statistics in SQL, never fetch raw data points."
 
 response_generation_task:
   description: |
-    Using the extracted data from Agent 1, generate a clear natural language response.
+    Using the extracted data from Agent 1, generate a clear natural language response to the user's query.
     
-    Agent 1 provides structured JSON with:
-    - cells, sensors, time_range (always included, defaults to 24h if user didn't specify)
-    - query_intent (correlation, comparison, trend, current, statistical)
-    - data: For comparison queries without time period, Agent 1 defaults to 24h and returns time-aligned data points for mentioned sensors/cells. For trends, returns historical points. For current, returns latest value.
-    - statistics: For single-cell queries: {"stddev": X, "mean": Y, ...}. For multi-cell queries: {"cell_1": {"stddev": X, "mean": Y, ...}, "cell_2": {...}} - only calculated values, not raw data
-    - correlations: Correlation coefficients and covariance for correlation queries - only calculated values, not raw data
+    Core Principles:
+    1. Understand the data structure: Analyze Agent 1's JSON output to understand what data is available
+    2. Extract relevant information: Identify key values, statistics, correlations, or trends based on query intent
+    3. Interpret results: Explain statistical measures, correlations, and comparisons in understandable terms
+    4. Generate clear response: Answer directly, provide context, and explain findings
     
-    Steps:
-    1. Analyze Agent 1's output: Check time_range, query_intent, and relevant sections (data/statistics/correlations)
+    Process:
+    1. Analyze Agent 1's output:
+       - Check time_range, query_intent, and relevant sections (data/statistics/correlations)
+       - Understand what data is available and what it represents
     
-    2. Extract information based on query type:
-       - Correlation: Coefficient from correlations section, explain meaning and strength
-       - Statistical (single cell): Values from statistics section, explain each metric's meaning
-       - Statistical (multiple cells): Extract per-cell statistics, compare values across cells, highlight which cells have higher/lower values
-       - Comparison: Use time-aligned data points, highlight differences and patterns
-       - Trend: Use historical data, describe direction and magnitude of change
-       - Current: Use latest value from data section
+    2. Extract and interpret information:
+       - For correlation queries: Extract correlation coefficient, explain strength and meaning
+       - For statistical queries: Extract relevant statistics, explain what each metric means
+       - For comparison queries: Compare values across cells/sensors, highlight key differences
+       - For trend queries: Describe direction, patterns, and magnitude of changes
+       - For current value queries: Present latest reading with context
+       - For multi-cell queries: Present per-cell results and compare across cells
     
     3. Generate response:
        - Answer directly in first sentence
        - Always mention time period analyzed
        - Include specific values with units
        - Explain statistical results in understandable terms
-       - For multi-cell statistical queries: Present results per cell, compare across cells (e.g., "Cell 1 has stddev of X, Cell 2 has stddev of Y...")
-       - For comparisons: Highlight key differences between cells/sensors
+       - For multi-cell queries: Present results per cell and compare across cells
        - Keep concise (2-4 paragraphs)
        - Use clear, professional language
     
-    4. If data insufficient: State what cannot be determined and why
+    4. Handle edge cases:
+       - If data insufficient: State what cannot be determined and why
+       - If time range was expanded: Acknowledge this in response
     
     5. Format naturally: Answer → Details → Context
   
   expected_output: "Clear natural language response answering the query with specific values, time period context, and explanations of statistical analyses. For multi-cell queries, present per-cell results and comparisons."
-

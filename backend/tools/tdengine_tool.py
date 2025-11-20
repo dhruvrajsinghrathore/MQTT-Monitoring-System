@@ -200,33 +200,56 @@ def get_tdengine_schema(cell_ids: str) -> str:
             context += f"- \"{key}\" → \"{value}\"\n"
         
         context += f"""
-## SQL Query Examples:
+## SQL Query Principles:
 
-### Get Latest Reading:
-SELECT reading, unit, ts FROM cell_N WHERE subtopic = 'sensor_name' ORDER BY ts DESC LIMIT 1
-
-### Get Historical Data:
-SELECT ts, reading, unit FROM cell_N WHERE subtopic = 'sensor_name' AND ts >= 'YYYY-MM-DD HH:MM:SS' ORDER BY ts ASC
-
-### Correlation Analysis:
--- For correlation between sensors/cells, fetch data for both:
--- Query 1: SELECT ts, reading as reading1 FROM cell_1 WHERE subtopic = 'sensor1' AND ts >= 'YYYY-MM-DD HH:MM:SS' ORDER BY ts ASC
--- Query 2: SELECT ts, reading as reading2 FROM cell_4 WHERE subtopic = 'sensor2' AND ts >= 'YYYY-MM-DD HH:MM:SS' ORDER BY ts ASC
--- Then calculate correlation coefficient from aligned timestamp data
-
-### Compare Multiple Cells:
-SELECT 'cell_1' as cell_id, subtopic, reading, ts FROM cell_1 WHERE subtopic = 'sensor_name' AND ts >= 'YYYY-MM-DD HH:MM:SS'
-UNION ALL
-SELECT 'cell_4' as cell_id, subtopic, reading, ts FROM cell_4 WHERE subtopic = 'sensor_name' AND ts >= 'YYYY-MM-DD HH:MM:SS'
-ORDER BY ts ASC
-
-## Important Notes:
+### Database Structure:
 - Primary timestamp column: `ts` (TIMESTAMP)
 - Sensor identifier column: `subtopic` (VARCHAR)
 - Value column: `reading` (DOUBLE)
-- Use ISO format timestamps: 'YYYY-MM-DD HH:MM:SS' or 'YYYY-MM-DDTHH:MM:SS.000Z'
-- Time filtering: ts >= 'cutoff_timestamp' (NOT INTERVAL syntax)
-- Sensor names in WHERE clause must match exact 'subtopic' values
+- Table naming: cell_N format (e.g., cell_1, cell_2)
+
+### Time Syntax:
+- Relative periods: NOW() - 24h, NOW() - 7d, NOW() - 1w, NOW() - 30d (NOT INTERVAL syntax)
+- Absolute dates: 'YYYY-MM-DD HH:MM:SS' or 'YYYY-MM-DDTHH:MM:SS.000Z'
+- Always include time filtering in WHERE clause
+
+### Query Optimization Principles (CRITICAL - Apply to ALL time periods):
+
+1. **ALL Time Periods (including 24 hours):**
+   - ALWAYS use SQL aggregation functions (AVG, STDDEV, MIN, MAX, PERCENTILE, COUNT) to calculate statistics directly
+   - NEVER fetch raw data points - they can cause context overflow even for short periods with many data points
+   - For trends: ALWAYS use INTERVAL grouping for time-based sampling (e.g., INTERVAL(10m) for 24h trends, INTERVAL(1h) for weekly trends, INTERVAL(1d) for monthly trends)
+   - For statistical queries: Calculate statistics in SQL, return aggregated values only
+   - For comparison queries: Use statistical aggregation per cell for comparison
+   - For correlation queries: Use time-bucketing, return only correlation coefficient and statistics
+
+3. **Multi-Cell Queries:**
+   - For all-cell searches: FIRST execute "SHOW TABLES" to discover ALL available cell tables (don't assume cell_1 through cell_5)
+   - Use UNION ALL to query ALL discovered cells in single query
+   - Include cell_id in SELECT to identify source cell
+   - Apply same filtering conditions uniformly across all cells
+   - For "right now" or "current" queries: Use ORDER BY ts DESC LIMIT 1 per cell, and consider adding time filter (ts >= NOW() - 1h) to ensure readings are recent
+
+4. **Correlation Queries (CRITICAL - ALL time periods):**
+   - Sensors may have different timestamps - use time-bucketing with INTERVAL to align them
+   - Use INTERVAL grouping to create time windows, then calculate correlation from aligned data
+   - Filter out NULL values after bucketing
+   - ALWAYS return ONLY correlation coefficient, covariance, and data_point_count - NEVER return raw or bucketed data points
+   - This prevents context overflow even for short periods (24 hours) that may have thousands of data points
+
+5. **Statistical Functions:**
+   - Available: AVG, STDDEV, VAR, MIN, MAX, COUNT, SUM, PERCENTILE, FIRST, LAST
+   - Correlation: Manual formula (AVG(x*y) - AVG(x)*AVG(y)) / (STDDEV(x) * STDDEV(y))
+
+### Query Patterns:
+
+- **Current Value:** ORDER BY ts DESC LIMIT 1
+- **Historical Data:** Include time filtering, ORDER BY ts ASC
+- **Aggregation:** Use AVG, STDDEV, MIN, MAX, PERCENTILE, COUNT for statistics
+- **Time Sampling:** Use INTERVAL grouping for trend analysis over long periods
+- **Multi-Cell:** Use UNION ALL with cell_id in SELECT
+- **Filtering:** Apply WHERE conditions for sensor names, value thresholds, time ranges
+
 """
         
         return context

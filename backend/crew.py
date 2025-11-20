@@ -30,13 +30,21 @@ class ChatbotCrew:
         """Initialize the crew with agents and tasks"""
         try:
             # Initialize LLM using CrewAI's LLM class (works with LiteLLM)
+            # Use Gemini API - prioritize GEMINI_API_KEY, fallback to GROQ_API_KEY
             api_key = os.getenv("GEMINI_API_KEY")
             if not api_key:
                 logger.warning("GEMINI_API_KEY not found in environment variables")
-                api_key = "your_gemini_api_key_here"  # Fallback for testing
+                # Fallback to GROQ_API_KEY
+                api_key = os.getenv("GROQ_API_KEY")
+                if api_key:
+                    logger.warning("Using GROQ_API_KEY as fallback. Please set GEMINI_API_KEY for Gemini models.")
+                    model_name = "groq/llama-3.3-70b-versatile"
+                else:
+                    raise ValueError("Neither GEMINI_API_KEY nor GROQ_API_KEY found in environment variables")
+            else:
+                # Use Gemini 2.5 Flash (different model from 2.5-pro, haven't tried this yet)
+                model_name = "gemini/gemini-2.5-flash"
             
-            # Use gemini-pro-latest (confirmed working with actual API calls)
-            model_name = "gemini/gemini-pro-latest"
             self.llm = LLM(
                 model=model_name,
                 api_key=api_key,
@@ -91,10 +99,22 @@ class ChatbotCrew:
             try:
                 # Get LLM for this agent (with specific temperature if provided)
                 temperature = config.get('temperature', 0.5)
-                # Use gemini-pro-latest (confirmed working with actual API calls)
+                # Use Gemini API - prioritize GEMINI_API_KEY, fallback to GROQ_API_KEY
+                api_key = os.getenv("GEMINI_API_KEY")
+                if not api_key:
+                    # Fallback to GROQ_API_KEY
+                    api_key = os.getenv("GROQ_API_KEY")
+                    if api_key:
+                        model_name = "groq/llama-3.3-70b-versatile"
+                    else:
+                        raise ValueError("Neither GEMINI_API_KEY nor GROQ_API_KEY found in environment variables")
+                else:
+                    # Use Gemini 2.5 Flash (different model from 2.5-pro, haven't tried this yet)
+                    model_name = "gemini/gemini-2.5-flash"
+                
                 agent_llm = LLM(
-                    model="gemini/gemini-pro-latest",
-                    api_key=os.getenv("GEMINI_API_KEY", "your_gemini_api_key_here"),
+                    model=model_name,
+                    api_key=api_key,
                     temperature=temperature
                 )
                 
@@ -219,14 +239,49 @@ IMPORTANT:
                 verbose=True
             )
             
-            # Execute crew
+            # Execute crew with retry logic for rate limits
             logger.info(f"Processing query with CrewAI: {user_query[:100]}...")
-            result = query_crew.kickoff()
             
-            # Extract final response (from Agent 2)
-            response = str(result)
-            logger.info(f"CrewAI response generated successfully")
-            return response
+            import time
+            import re
+            max_retries = 3
+            retry_delay = 20  # Start with 20 seconds
+            
+            for attempt in range(max_retries):
+                try:
+                    result = query_crew.kickoff()
+                    # Extract final response (from Agent 2)
+                    response = str(result)
+                    logger.info(f"CrewAI response generated successfully")
+                    return response
+                except Exception as e:
+                    error_str = str(e)
+                    # Check if it's a rate limit error (Groq or Gemini)
+                    if "429" in error_str or "rate_limit" in error_str.lower() or "RESOURCE_EXHAUSTED" in error_str or "quota" in error_str.lower():
+                        if attempt < max_retries - 1:
+                            # Extract retry delay from error if available
+                            if "try again in" in error_str.lower():
+                                try:
+                                    delay_match = re.search(r'try again in ([\d.]+)s', error_str.lower())
+                                    if delay_match:
+                                        retry_delay = float(delay_match.group(1)) + 5  # Add 5 seconds buffer
+                                except:
+                                    pass
+                            
+                            logger.warning(f"Rate limit exceeded (attempt {attempt + 1}/{max_retries}). Retrying in {retry_delay:.1f} seconds...")
+                            time.sleep(retry_delay)
+                            retry_delay *= 1.5  # Exponential backoff (less aggressive than before)
+                            continue
+                        else:
+                            logger.error(f"Rate limit exceeded after {max_retries} attempts")
+                            raise Exception(
+                                "I apologize, but the AI service is currently experiencing rate limitations. "
+                                "Please try again in a few minutes. "
+                                "If this persists, you may need to upgrade your API plan or wait for the rate limit to reset."
+                            )
+                    else:
+                        # Not a rate limit error, raise immediately
+                        raise
             
         except Exception as e:
             logger.error(f"Error processing query with CrewAI: {e}")

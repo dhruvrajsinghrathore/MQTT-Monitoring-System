@@ -806,14 +806,13 @@ async def chatbot_query(request: dict):
         if "429" in error_msg or "quota" in error_msg.lower() or "RESOURCE_EXHAUSTED" in error_msg:
             user_message = (
                 "I apologize, but the AI service is currently experiencing quota limitations. "
-                "Please try again in a few minutes, or check your Gemini API quota at "
-                "https://ai.dev/usage?tab=rate-limit. "
+                "Please try again in a few minutes. "
                 "If this persists, you may need to upgrade your API plan or wait for quota reset."
             )
         elif "API" in error_msg or "api_key" in error_msg.lower():
             user_message = (
                 "I apologize, but there's an issue with the AI service configuration. "
-                "Please check that your Gemini API key is valid and has available quota."
+                "Please check that your API key (GROQ_API_KEY or GEMINI_API_KEY) is valid and has available quota."
             )
         else:
             user_message = f"I apologize, but I encountered an error processing your query: {error_msg[:200]}"
