@@ -15,9 +15,10 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tools.tdengine_tool import execute_tdengine_query, get_tdengine_schema
 from tdengine_service import tdengine_service
+from tamu_agent_demo import TAMUSAILLM
 
-# Load environment variables
-load_dotenv()
+# Load environment variables from project root
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env'))
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -29,28 +30,8 @@ class ChatbotCrew:
     def __init__(self):
         """Initialize the crew with agents and tasks"""
         try:
-            # Initialize LLM using CrewAI's LLM class (works with LiteLLM)
-            # Use Gemini API - prioritize GEMINI_API_KEY, fallback to GROQ_API_KEY
-            api_key = os.getenv("GEMINI_API_KEY")
-            if not api_key:
-                logger.warning("GEMINI_API_KEY not found in environment variables")
-                # Fallback to GROQ_API_KEY
-                api_key = os.getenv("GROQ_API_KEY")
-                if api_key:
-                    logger.warning("Using GROQ_API_KEY as fallback. Please set GEMINI_API_KEY for Gemini models.")
-                    model_name = "groq/llama-3.3-70b-versatile"
-                else:
-                    raise ValueError("Neither GEMINI_API_KEY nor GROQ_API_KEY found in environment variables")
-            else:
-                # Use Gemini 2.5 Flash (different model from 2.5-pro, haven't tried this yet)
-                model_name = "gemini/gemini-2.5-flash"
-            
-            self.llm = LLM(
-                model=model_name,
-                api_key=api_key,
-                temperature=0.5
-            )
-            logger.info(f"Initialized LLM with model: {model_name}")
+            # Initialize LLM using provider switching
+            self.llm = self._create_llm(temperature=0.5)
             
             # Load configurations
             self._load_configs()
@@ -91,6 +72,54 @@ class ChatbotCrew:
         
         with open(tasks_path, 'r') as f:
             self.tasks_config = yaml.safe_load(f)
+
+    def _create_llm(self, temperature: float = 0.5) -> LLM:
+        """
+        Create LLM instance based on LLM_PROVIDER environment variable
+
+        Args:
+            temperature: Temperature for generation
+
+        Returns:
+            CrewAI LLM instance
+        """
+        provider = os.getenv("LLM_PROVIDER", "tamus").lower()
+
+        if provider == "tamus":
+            # Use TAMUS AI with custom LLM class
+            try:
+                logger.info("Initializing TAMUS AI LLM...")
+                return TAMUSAILLM(temperature=temperature)
+            except Exception as e:
+                logger.error(f"Failed to initialize TAMUS AI LLM: {e}")
+                logger.warning("Falling back to Gemini...")
+                provider = "gemini"
+
+        if provider == "gemini":
+            # Use Gemini API - prioritize GEMINI_API_KEY, fallback to GROQ_API_KEY
+            api_key = os.getenv("GEMINI_API_KEY")
+            if not api_key:
+                logger.warning("GEMINI_API_KEY not found in environment variables")
+                # Fallback to GROQ_API_KEY
+                api_key = os.getenv("GROQ_API_KEY")
+                if api_key:
+                    logger.warning("Using GROQ_API_KEY as fallback. Please set GEMINI_API_KEY for Gemini models.")
+                    model_name = "groq/llama-3.3-70b-versatile"
+                else:
+                    raise ValueError("Neither GEMINI_API_KEY nor GROQ_API_KEY found in environment variables")
+            else:
+                # Use Gemini 2.5 Flash (different model from 2.5-pro, haven't tried this yet)
+                model_name = "gemini/gemini-2.5-flash"
+
+            logger.info(f"Initializing Gemini LLM with model: {model_name}")
+            return LLM(
+                model=model_name,
+                api_key=api_key,
+                temperature=temperature
+            )
+
+        raise ValueError(f"Unsupported LLM_PROVIDER: {provider}. Supported: tamus, gemini")
+
     def _create_agents(self) -> dict:
         """Create agents from configuration"""
         agents = {}
@@ -99,24 +128,7 @@ class ChatbotCrew:
             try:
                 # Get LLM for this agent (with specific temperature if provided)
                 temperature = config.get('temperature', 0.5)
-                # Use Gemini API - prioritize GEMINI_API_KEY, fallback to GROQ_API_KEY
-                api_key = os.getenv("GEMINI_API_KEY")
-                if not api_key:
-                    # Fallback to GROQ_API_KEY
-                    api_key = os.getenv("GROQ_API_KEY")
-                    if api_key:
-                        model_name = "groq/llama-3.3-70b-versatile"
-                    else:
-                        raise ValueError("Neither GEMINI_API_KEY nor GROQ_API_KEY found in environment variables")
-                else:
-                    # Use Gemini 2.5 Flash (different model from 2.5-pro, haven't tried this yet)
-                    model_name = "gemini/gemini-2.5-flash"
-                
-                agent_llm = LLM(
-                    model=model_name,
-                    api_key=api_key,
-                    temperature=temperature
-                )
+                agent_llm = self._create_llm(temperature=temperature)
                 
                 # Prepare tools
                 tools = []

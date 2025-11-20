@@ -23,6 +23,7 @@ If this doesn't work, follow the detailed setup below.
 - **Node.js** (v16 or higher) and npm
 - **Python** (v3.8 or higher) and pip
 - **Access to an MQTT broker** (or use the default cloud.dtkit.org)
+- **LLM API Key** (TAMUS AI or Gemini API key)
 
 ### 1. Frontend Setup (React + Vite)
 
@@ -52,11 +53,37 @@ source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 # Install Python dependencies
 pip install -r requirements.txt
 
+# Set up environment variables (see Environment Configuration section below)
 # Start backend server (optional - also done by start.sh)
 python server.py
 ```
 
-### 3. Run Both Servers
+### 3. Environment Configuration
+
+Create a `.env` file in the backend directory with your API keys and configuration:
+
+```bash
+# LLM Provider Configuration
+# Choose 'tamus' (default) or 'gemini'
+LLM_PROVIDER=tamus
+
+# TAMUS AI Configuration (for LLM_PROVIDER=tamus)
+# Get API key from: https://docs.tamus.ai/docs/prod/advanced/api/test-tamus-ai-chat-api-key
+TAMUS_AI_CHAT_API_KEY=your_tamus_ai_api_key_here
+TAMUS_AI_CHAT_API_ENDPOINT=https://chat-api.tamu.ai
+TAMUS_AI_MODEL=protected.gemini-2.0-flash-lite
+
+# Gemini Configuration (for LLM_PROVIDER=gemini)
+# Get API key from: https://makersuite.google.com/app/apikey
+GEMINI_API_KEY=your_gemini_api_key_here
+GROQ_API_KEY=your_groq_api_key_here  # Fallback option
+```
+
+**LLM Provider Options:**
+- **`tamus`** (default): Uses TAMU's AI inference platform. Requires `TAMUS_AI_CHAT_API_KEY`.
+- **`gemini`**: Uses Google Gemini API. Requires `GEMINI_API_KEY`.
+
+### 4. Run Both Servers
 
 From the GUI directory:
 
@@ -78,7 +105,7 @@ chmod +x start-production.sh
 ./start-production.sh
 ```
 
-### 4. Test Setup (Optional)
+### 5. Test Setup (Optional)
 
 ```bash
 # Verify everything is installed correctly

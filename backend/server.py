@@ -18,8 +18,8 @@ from database_service import db
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
-# Load environment variables
-load_dotenv()
+# Load environment variables from project root
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '..', '.env'))
 
 # Add the parent directory to Python path to import from Scenario_2
 import sys
