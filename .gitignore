@@ -16,7 +16,6 @@ frontend/dist/
 dist/
 
 # Environment files
-/Users/dhruv/Downloads/Directed_studies/MQTT-Monitor/.env
 .env
 .env.local
 .env.development.local
