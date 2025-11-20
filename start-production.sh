@@ -27,11 +27,12 @@ cd frontend
 npm run build
 cd ..
 
-# Start backend server with gunicorn
+# Start backend server with gunicorn (using uvicorn workers for FastAPI)
 echo "📡 Starting backend server (production) on http://localhost:8000"
 cd backend
 source .venv/bin/activate
-gunicorn --worker-class eventlet -w 1 --bind 0.0.0.0:8000 wsgi:app &
+# Note: Requires: pip install gunicorn uvicorn
+gunicorn -k uvicorn.workers.UvicornWorker -w 1 --bind 0.0.0.0:8000 wsgi:app &
 BACKEND_PID=$!
 cd ..
 

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import { ArrowLeft, Activity, Thermometer, Gauge, Zap, Navigation, Beaker, RefreshCw, Database } from 'lucide-react';
+import { ArrowLeft, Activity, Thermometer, Gauge, Zap, Navigation, Beaker, RefreshCw, Database, MessageCircle } from 'lucide-react';
 import {
   LineChart,
   Line,
@@ -13,6 +13,7 @@ import {
 } from 'recharts';
 import { WEBSOCKET_URL } from '../config/api';
 import { DatabaseService } from '../services/DatabaseService';
+import ChatBot from '../components/ChatBot';
 
 interface SensorDataPoint {
   timestamp: string;
@@ -24,6 +25,8 @@ interface SensorDataPoint {
 }
 
 interface ChartDataPoint {
+  t: number;        // numeric epoch ms (stable x)
+  i: number;        // fixed index within window (0..19)
   time: string;
   [key: string]: any; // Dynamic sensor values
 }
@@ -39,6 +42,13 @@ const EquipmentDetailPage: React.FC = () => {
   const [lastUpdate, setLastUpdate] = useState<string>('');
   const [historicalDataLoaded, setHistoricalDataLoaded] = useState(false);
   const [availableSessions, setAvailableSessions] = useState<string[]>([]);
+  // Track selected features for filtering
+  const [selectedFeatures, setSelectedFeatures] = useState<Set<string>>(new Set());
+  // Track all available features
+  const [availableFeatures, setAvailableFeatures] = useState<string[]>([]);
+  
+  // Chatbot state
+  const [isChatbotOpen, setIsChatbotOpen] = useState(false);
   
   const equipment = (location.state as any)?.equipment;
   const project = (location.state as any)?.project;
@@ -114,6 +124,23 @@ const EquipmentDetailPage: React.FC = () => {
       '#06B6D4', // cyan
       '#F97316', // orange
       '#84CC16', // lime
+      '#E11D48', // rose
+      '#6366F1', // indigo
+      '#F43F5E', // pink
+      '#22D3EE', // sky
+      '#A3E635', // light green
+      '#FACC15', // amber
+      '#D946EF', // fuchsia
+      '#64748B', // slate
+      '#FDE68A', // light yellow
+      '#C026D3', // violet
+      '#4ADE80', // emerald
+      '#F87171', // light red
+      '#0EA5E9', // light blue
+      '#FBBF24', // gold
+      '#7C3AED', // deep purple
+      '#2DD4BF', // teal
+      '#F472B6', // light pink
     ];
     return colors[index % colors.length];
   };
@@ -170,19 +197,44 @@ const EquipmentDetailPage: React.FC = () => {
           try {
             const message = JSON.parse(event.data);
             
-            if (message.type === 'mqtt_data' && message.data.equipment_id === equipmentId) {
-              const newDataPoint: SensorDataPoint = {
-                timestamp: message.data.timestamp,
-                value: message.data.value,
-                sensor_type: message.data.sensor_type,
-                equipment_id: message.data.equipment_id,
-                unit: message.data.unit,
-                status: message.data.status
-              };
+            if (message.type === 'graph_update' && message.data.nodes) {
+              const equipmentNode = message.data.nodes.find((node: any) => 
+                node.data.equipment_id === equipmentId
+              );
               
-              // Append new data to existing historical + live data, keep last 100 points
-              setSensorData(prev => [...prev.slice(-99), newDataPoint]);
-              setLastUpdate(new Date().toLocaleTimeString());
+              if (equipmentNode && equipmentNode.data.sensors) {
+                // ✅ one batch timestamp for all sensors in this update
+                const batchIso =
+                  message.data?.timestamp ??
+                  equipmentNode.data?.timestamp ??
+                  new Date().toISOString();
+
+                // Process each sensor separately
+                equipmentNode.data.sensors.forEach((sensor: any) => {
+                  const timestamp = sensor.timestamp || batchIso;
+                  const newDataPoint: SensorDataPoint = {
+                    timestamp,
+                    value: sensor.value,
+                    sensor_type: sensor.sensor_type,
+                    equipment_id: equipmentId,
+                    unit: sensor.unit,
+                    status: sensor.status || 'active'
+                  };
+                  
+                  // Update available features if this is a new sensor type
+                  setAvailableFeatures(prev => {
+                    if (!prev.includes(sensor.sensor_type)) {
+                      return [...prev, sensor.sensor_type].sort();
+                    }
+                    return prev;
+                  });
+
+                  // Append to existing data without removing old points
+                  setSensorData(prev => [...prev, newDataPoint]);
+                });
+
+                setLastUpdate(new Date().toLocaleTimeString());
+              }
             }
           } catch (error) {
             console.error('Error parsing WebSocket message:', error);
@@ -208,25 +260,69 @@ const EquipmentDetailPage: React.FC = () => {
   useEffect(() => {
     if (sensorData.length === 0) return;
 
-    // Group data by timestamp
-    const timeGroups = sensorData.reduce((acc, point) => {
-      const time = new Date(point.timestamp).toLocaleTimeString();
-      if (!acc[time]) {
-        acc[time] = { time };
-      }
-      
-      const value = formatValue(point.value);
-      acc[time][point.sensor_type] = value;
-      
-      return acc;
-    }, {} as { [key: string]: ChartDataPoint });
+    // 1) unique sorted timestamps (epoch ms)
+    const allTs = Array.from(
+      new Set(sensorData.map(p => new Date(p.timestamp).getTime()))
+    ).sort((a, b) => a - b);
 
-    const newChartData = Object.values(timeGroups).slice(-20); // Last 20 time points
-    setChartData(newChartData);
+    // 2) Calculate sliding window (last 30 seconds)
+    const windowSize = 30 * 1000; // 30 seconds in milliseconds
+    const latestTime = allTs[allTs.length - 1];
+    const windowStart = latestTime - windowSize;
+    
+    // Keep only timestamps within sliding window
+    const windowTs = allTs.filter(t => t >= windowStart);
+
+    // 3) Create rows for timestamps in window
+    const rows: ChartDataPoint[] = windowTs.map((t, idx) => {
+      const row: ChartDataPoint = {
+        t,
+        i: idx,
+        time: new Date(t).toLocaleTimeString(),
+      };
+      return row;
+    });
+
+    const rowByT = new Map<number, ChartDataPoint>(rows.map(r => [r.t, r]));
+
+    // 3) Find all sensor types present in these last 20 timestamps
+    const typesInWindow = new Set<string>();
+    for (const p of sensorData) {
+      const t = new Date(p.timestamp).getTime();
+      if (!rowByT.has(t)) continue;
+      typesInWindow.add(p.sensor_type);
+    }
+
+    // 4) Initialize each row with all sensor keys set to null
+    rows.forEach(r => {
+      typesInWindow.forEach(st => { if (!(st in r)) r[st] = null; });
+    });
+
+    // 5) Fill values for (t, sensor_type)
+    for (const p of sensorData) {
+      const t = new Date(p.timestamp).getTime();
+      const row = rowByT.get(t);
+      if (!row) continue;
+      row[p.sensor_type] = formatValue(p.value);
+    }
+
+    setChartData(rows);
   }, [sensorData]);
 
+
   // Get unique sensor types for the chart
-  const sensorTypes = Array.from(new Set(sensorData.map(point => point.sensor_type)));
+  // const sensorTypes = Array.from(new Set(sensorData.map(point => point.sensor_type)));
+
+  const sensorTypes = React.useMemo(() => {
+    const set = new Set<string>();
+    chartData.forEach(row => {
+      Object.keys(row).forEach(k => {
+        if (k !== 't' && k !== 'i' && k !== 'time') set.add(k);
+      });
+    });
+    return Array.from(set).sort();
+  }, [chartData]);
+
 
   const formatValueForDisplay = (value: number | string | object, unit?: string): string => {
     if (typeof value === 'object' && value !== null) {
@@ -241,8 +337,9 @@ const EquipmentDetailPage: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header */}
+    <div className="min-h-screen bg-gray-50 flex">
+      {/* Main Content */}
+      <div className={`flex-1 transition-all duration-300`}>
       <div className="bg-white border-b border-gray-200 px-6 py-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-4">
@@ -263,6 +360,19 @@ const EquipmentDetailPage: React.FC = () => {
           </div>
           
           <div className="flex items-center space-x-4">
+            {/* Chatbot Toggle Button */}
+            <button
+              onClick={() => setIsChatbotOpen(!isChatbotOpen)}
+              className={`p-2 rounded-lg transition-colors ${
+                isChatbotOpen 
+                  ? 'bg-blue-100 text-blue-600' 
+                  : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
+              }`}
+              title="Open MQTT Assistant"
+            >
+              <MessageCircle className="w-5 h-5" />
+            </button>
+            
             {/* Connection Status */}
             {/* Historical Data Status */}
             {historicalDataLoaded && availableSessions.length > 0 && (
@@ -293,14 +403,14 @@ const EquipmentDetailPage: React.FC = () => {
 
       {/* Main Content */}
       <div className="p-6">
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className={`flex gap-6 ${isChatbotOpen ? 'h-[calc(100vh-120px)]' : ''}`}>
           
           {/* Current Values */}
-          <div className="lg:col-span-1">
-            <div className="bg-white rounded-lg shadow border border-gray-200 p-6">
+          <div className={`${isChatbotOpen ? 'w-1/5' : 'w-1/4'} flex-shrink-0`}>
+            <div className="bg-white rounded-lg shadow border border-gray-200 p-6 h-[calc(100vh-120px)] flex flex-col">
               <h3 className="text-lg font-medium text-gray-900 mb-4">Current Values</h3>
               
-              <div className="space-y-4">
+              <div className="space-y-4 overflow-y-auto flex-1 pr-2">
                 {equipment?.sensors?.map((sensor: any, index: number) => (
                   <div key={index} className="p-4 rounded-lg bg-gray-50 border border-gray-100">
                     <div className="flex items-center gap-3 mb-2">
@@ -328,25 +438,64 @@ const EquipmentDetailPage: React.FC = () => {
           </div>
 
           {/* Line Chart */}
-          <div className="lg:col-span-2">
-            <div className="bg-white rounded-lg shadow border border-gray-200 p-6">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-medium text-gray-900">Sensor Trends</h3>
-                <div className="flex items-center space-x-2 text-sm text-gray-600">
-                  <RefreshCw className="w-4 h-4" />
-                  <span>{chartData.length} data points</span>
+          <div className="flex-1 min-w-0">
+            <div className="bg-white rounded-lg shadow border border-gray-200 p-6 h-[calc(100vh-120px)] flex flex-col">
+              <div className="flex-shrink-0 mb-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-lg font-medium text-gray-900">Sensor Trends</h3>
+                  <div className="flex items-center space-x-2 text-sm text-gray-600">
+                    <RefreshCw className="w-4 h-4" />
+                    <span>{chartData.length} data points</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Feature Selection */}
+              <div className="flex-shrink-0 mb-4">
+                <div className="bg-gray-50 rounded-lg border border-gray-200 p-4">
+                  <h4 className="text-base font-medium text-gray-700 mb-3">Select Features to Display</h4>
+                  <div className="flex flex-wrap gap-2 max-h-28 overflow-y-auto">
+                    {availableFeatures.map(feature => (
+                      <button
+                        key={feature}
+                        onClick={() => setSelectedFeatures(prev => {
+                          const newSet = new Set(prev);
+                          if (newSet.has(feature)) {
+                            newSet.delete(feature);
+                          } else {
+                            newSet.add(feature);
+                          }
+                          return newSet;
+                        })}
+                        className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors
+                          ${selectedFeatures.has(feature)
+                            ? 'bg-blue-100 text-blue-800 hover:bg-blue-200'
+                            : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                          }`}
+                      >
+                        {feature.replace('_', ' ')}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
               
               {chartData.length > 0 ? (
-                <div className="h-96">
+                <div className="flex-1 min-h-0">
                   <ResponsiveContainer width="100%" height="100%">
                     <LineChart data={chartData}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                      <XAxis 
-                        dataKey="time" 
+                      <XAxis
+                        dataKey="t"
+                        type="number"
+                        allowDecimals={false}
+                        domain={['dataMin', 'dataMax']}
+                        tickFormatter={(t) => new Date(t).toLocaleTimeString()}
                         stroke="#6b7280"
                         fontSize={12}
+                        interval="preserveStartEnd"
+                        minTickGap={40}
+                        padding={{ left: 0, right: 0 }}
                       />
                       <YAxis 
                         stroke="#6b7280"
@@ -360,19 +509,33 @@ const EquipmentDetailPage: React.FC = () => {
                           boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)'
                         }}
                       />
-                      <Legend />
-                      {sensorTypes.map((sensorType, index) => (
-                        <Line
-                          key={sensorType}
-                          type="monotone"
-                          dataKey={sensorType}
-                          stroke={getSensorColor(sensorType, index)}
-                          strokeWidth={2}
-                          dot={{ r: 3 }}
-                          activeDot={{ r: 5 }}
-                          name={sensorType.replace('_', ' ')}
-                        />
-                      ))}
+                      <Legend 
+                        wrapperStyle={{
+                          paddingTop: '15px',
+                          fontSize: '14px',
+                          lineHeight: '1.5'
+                        }}
+                        iconType="circle"
+                        layout="horizontal"
+                        verticalAlign="bottom"
+                        align="center"
+                      />
+                      {sensorTypes
+                        .filter(type => selectedFeatures.size === 0 || selectedFeatures.has(type))
+                        .map((sensorType, index) => (
+                          <Line
+                            key={sensorType}
+                            type="monotone"
+                            dataKey={sensorType}
+                            stroke={getSensorColor(sensorType, index)}
+                            strokeWidth={2}
+                            dot={{ r: 3 }}
+                            activeDot={{ r: 5 }}
+                            name={sensorType.replace('_', ' ')}
+                            connectNulls
+                            isAnimationActive={false} // Disable animation for real-time updates
+                          />
+                        ))}
                     </LineChart>
                   </ResponsiveContainer>
                 </div>
@@ -394,6 +557,18 @@ const EquipmentDetailPage: React.FC = () => {
           </div>
         </div>
       </div>
+      </div>
+
+      {/* Chatbot */}
+      {isChatbotOpen && (
+        <ChatBot 
+          isOpen={isChatbotOpen} 
+          onClose={() => setIsChatbotOpen(false)}
+          context={`equipment "${equipment?.equipment_id || equipmentId}" detail view`}
+          pageType="equipment"
+          cellId={equipment?.equipment_id || equipmentId}
+        />
+      )}
     </div>
   );
 };

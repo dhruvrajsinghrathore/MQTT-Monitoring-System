@@ -1,4 +1,4 @@
-# MQTT Workflow Editor
+# SensorFlow
 
 A minimal, user-friendly MQTT workflow editor that allows you to:
 1. Configure MQTT connections and discover available nodes

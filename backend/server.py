@@ -5,6 +5,7 @@ import json
 import logging
 import threading
 import time
+import os
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 from concurrent.futures import ThreadPoolExecutor
@@ -15,6 +16,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from database_service import db
 from pydantic import BaseModel
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Add the parent directory to Python path to import from Scenario_2
 import sys
@@ -36,16 +41,22 @@ class GraphDataManager:
         self.nodes_data = {}  # {equipment_id: node_data}
         self.sensor_data = {}  # {equipment_id: {sensor_type: sensor_reading}}
         self.project = None
+        self.last_update_time = 0  # Throttling
+        self.update_interval = 0.5  # Send updates max every 500ms
         
     def set_project(self, project):
         """Set the current project and initialize nodes from project data"""
         self.project = project
+        
+        # ALWAYS clear existing data when setting a new project
         self.nodes_data = {}
         self.sensor_data = {}
         
         if project and project.get('graph_layout', {}).get('nodes'):
+            logger.info(f"🔍 GraphDataManager initializing with {len(project['graph_layout']['nodes'])} nodes from project")
             for node in project['graph_layout']['nodes']:
                 equipment_id = node['data']['equipment_id']
+                logger.info(f"🔍 Initializing node: {equipment_id}")
                 self.nodes_data[equipment_id] = {
                     'id': node['id'],
                     'type': 'custom',
@@ -58,20 +69,47 @@ class GraphDataManager:
                     }
                 }
                 self.sensor_data[equipment_id] = {}
+            
+            logger.info(f"🔍 GraphDataManager initialized with nodes: {list(self.nodes_data.keys())}")
+        else:
+            logger.info("🔍 No graph layout nodes found in project")
     
     def update_sensor_data(self, equipment_id: str, sensor_type: str, sensor_reading: dict):
         """Update sensor data for a specific equipment and sensor type"""
-        # Ensure equipment exists in our data
+        # Only process equipment that exists in the project's graph layout
         if equipment_id not in self.sensor_data:
-            # Create a new node if it doesn't exist
+            logger.debug(f"🔍 Equipment {equipment_id} not in sensor_data, checking if it's in graph layout")
+            
+            # Check if this equipment is in the project's graph layout
+            if not self.project or not self.project.get('graph_layout', {}).get('nodes'):
+                logger.debug(f"🔍 No project or graph layout, skipping {equipment_id}")
+                return  # No project or no graph layout, skip
+            
+            # Check if this equipment_id is in the graph layout
+            equipment_in_layout = any(
+                node['data']['equipment_id'] == equipment_id 
+                for node in self.project['graph_layout']['nodes']
+            )
+            
+            if not equipment_in_layout:
+                logger.debug(f"🔍 Equipment {equipment_id} not in graph layout, skipping")
+                return  # Equipment not in graph layout, skip
+            
+            logger.debug(f"🔍 Equipment {equipment_id} is in graph layout, creating node")
+            
+            # Find the original node data from the graph layout
+            original_node = next(
+                node for node in self.project['graph_layout']['nodes']
+                if node['data']['equipment_id'] == equipment_id
+            )
+            
+            # Create a new node using the original node data
             self.nodes_data[equipment_id] = {
-                'id': f"{equipment_id}_{int(time.time())}",
+                'id': original_node['id'],
                 'type': 'custom',
-                'position': {'x': len(self.nodes_data) * 200, 'y': len(self.nodes_data) * 100},
+                'position': original_node['position'],
                 'data': {
-                    'equipment_id': equipment_id,
-                    'equipment_type': equipment_id.split('_')[0] if '_' in equipment_id else 'unknown',
-                    'label': equipment_id,
+                    **original_node['data'],
                     'sensors': [],
                     'status': 'idle',
                     'last_updated': None
@@ -98,6 +136,14 @@ class GraphDataManager:
         self.nodes_data[equipment_id]['data']['status'] = 'active' if sensors else 'idle'
         self.nodes_data[equipment_id]['data']['last_updated'] = datetime.now().isoformat()
     
+    def should_send_update(self):
+        """Check if enough time has passed to send an update"""
+        current_time = time.time()
+        if current_time - self.last_update_time >= self.update_interval:
+            self.last_update_time = current_time
+            return True
+        return False
+    
     def get_graph_data(self):
         """Get complete graph data with all nodes and their sensor data"""
         nodes = list(self.nodes_data.values())
@@ -106,6 +152,8 @@ class GraphDataManager:
         # Get edges from project if available
         if self.project and self.project.get('graph_layout', {}).get('edges'):
             edges = self.project['graph_layout']['edges']
+        
+        logger.debug(f"🔍 GraphDataManager sending {len(nodes)} nodes: {[n['id'] for n in nodes]}")
         
         return {
             'nodes': nodes,
@@ -207,7 +255,7 @@ class MQTTDiscovery:
                         'last_seen': datetime.now().isoformat(),
                         'sample_data': payload
                     }
-                    logger.info(f"Discovered: {equipment_id} / {sensor_type} on topic {topic}")
+                    logger.debug(f"Discovered: {equipment_id} / {sensor_type} on topic {topic}")
             else:
                 logger.warning("AdaptiveSchemaLearner not available for discovery")
             
@@ -359,12 +407,17 @@ class MQTTMonitoring:
                 
                 graph_manager.update_sensor_data(equipment_id, sensor_type, sensor_reading)
                 
-                # Get complete graph data and send to all connected WebSocket clients
-                graph_data = graph_manager.get_graph_data()
-                message = {
-                    'type': 'graph_update',
-                    'data': graph_data
-                }
+                # Only send graph updates if enough time has passed (throttling)
+                if graph_manager.should_send_update():
+                    graph_data = graph_manager.get_graph_data()
+                    message = {
+                        'type': 'graph_update',
+                        'data': graph_data
+                    }
+                    
+                    # Send to all connected WebSocket clients - use thread-safe approach
+                    if main_loop and not main_loop.is_closed():
+                        asyncio.run_coroutine_threadsafe(broadcast_to_websockets(message), main_loop)
                     
                 # Store message in database if session is active
                 if self.current_session_id and self.project_id:
@@ -380,10 +433,6 @@ class MQTTMonitoring:
                         })
                     except Exception as e:
                         logger.error(f"Failed to store message in database: {e}")
-                
-                # Send to all connected WebSocket clients - use thread-safe approach
-                if main_loop and not main_loop.is_closed():
-                    asyncio.run_coroutine_threadsafe(broadcast_to_websockets(message), main_loop)
             
         except Exception as e:
             logger.error(f"Error processing monitoring message: {e}")
@@ -718,6 +767,69 @@ async def get_storage_stats():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+# Chatbot API Endpoints
+@app.post("/api/chatbot/query")
+async def chatbot_query(request: dict):
+    """Process chatbot query with CrewAI"""
+    try:
+        from crewai_service import crewai_service
+        
+        user_query = request.get('query', '')
+        page_type = request.get('page_type', 'monitor')  # 'monitor' or 'equipment'
+        cell_id = request.get('cell_id', None)
+        references = request.get('references', [])  # Get @ references from frontend
+        
+        if not user_query:
+            raise HTTPException(status_code=400, detail="Query is required")
+        
+        # Process query with CrewAI
+        response = await crewai_service.process_query(
+            user_query=user_query,
+            page_type=page_type,
+            cell_id=cell_id,
+            references=references
+        )
+        
+        return {
+            "response": response,
+            "timestamp": datetime.now().isoformat(),
+            "page_type": page_type,
+            "cell_id": cell_id,
+            "references": references
+        }
+        
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"Chatbot query failed: {error_msg}")
+        
+        # Check if it's a quota/API error
+        if "429" in error_msg or "quota" in error_msg.lower() or "RESOURCE_EXHAUSTED" in error_msg:
+            user_message = (
+                "I apologize, but the AI service is currently experiencing quota limitations. "
+                "Please try again in a few minutes. "
+                "If this persists, you may need to upgrade your API plan or wait for quota reset."
+            )
+        elif "API" in error_msg or "api_key" in error_msg.lower():
+            user_message = (
+                "I apologize, but there's an issue with the AI service configuration. "
+                "Please check that your API key (GROQ_API_KEY or GEMINI_API_KEY) is valid and has available quota."
+            )
+        else:
+            user_message = f"I apologize, but I encountered an error processing your query: {error_msg[:200]}"
+        
+        raise HTTPException(status_code=500, detail=user_message)
+
+@app.get("/api/chatbot/cells")
+async def get_available_cells():
+    """Get list of available cells for chatbot context"""
+    try:
+        from tdengine_service import tdengine_service
+        cells = tdengine_service.get_available_cells()
+        return {"cells": cells, "count": len(cells)}
+    except Exception as e:
+        logger.error(f"Failed to get available cells: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
@@ -742,6 +854,6 @@ async def shutdown_event():
 
 if __name__ == "__main__":
     import uvicorn
-    print("🚀 Starting MQTT GUI Backend Server (FastAPI) on http://localhost:8000")
-    print("📡 WebSocket will be available at ws://localhost:8000/ws")
-    uvicorn.run(app, host="0.0.0.0", port=8000) 
+    print("🚀 Starting MQTT GUI Backend Server (FastAPI) on http://localhost:8001")
+    print("📡 WebSocket will be available at ws://localhost:8001/ws")
+    uvicorn.run(app, host="0.0.0.0", port=8001) 

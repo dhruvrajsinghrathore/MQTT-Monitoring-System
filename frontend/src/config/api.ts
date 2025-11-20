@@ -1,6 +1,6 @@
 // API Configuration
-export const API_BASE_URL = 'http://localhost:8000'; // Backend server URL
-export const WEBSOCKET_URL = 'http://localhost:8000'; // WebSocket server URL
+export const API_BASE_URL = 'http://localhost:8001'; // Backend server URL
+export const WEBSOCKET_URL = 'http://localhost:8001'; // WebSocket server URL
 
 // API Endpoints
 export const API_ENDPOINTS = {
