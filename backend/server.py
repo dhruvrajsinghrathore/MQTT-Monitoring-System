@@ -8,6 +8,7 @@ import logging
 import threading
 import time
 import os
+import uuid
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 from concurrent.futures import ThreadPoolExecutor
@@ -919,6 +920,125 @@ async def get_node_image(project_id: str, filename: str):
         logger.error(f"Failed to serve image {filename}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to serve image: {str(e)}")
 
+@app.post("/api/projects/{project_id}/alerts/config/threshold")
+async def create_alert_threshold(project_id: str, threshold_data: dict):
+    """Create a new alert threshold"""
+    try:
+        # Validate required fields
+        if not threshold_data.get('topic_name'):
+            raise HTTPException(status_code=400, detail="topic_name is required")
+
+        # Generate URL-safe ID
+        safe_topic = threshold_data['topic_name'].replace('/', '_')
+        threshold_id = f"{safe_topic}_{str(uuid.uuid4())[:8]}"
+
+        # Create threshold object
+        threshold = {
+            'id': threshold_id,
+            'project_id': project_id,
+            'topic_name': threshold_data['topic_name'],
+            'sensor_type': threshold_data['topic_name'].split('/')[-1] if '/' in threshold_data['topic_name'] else threshold_data['topic_name'],
+            'min_value': threshold_data.get('min_value'),
+            'max_value': threshold_data.get('max_value'),
+            'enabled': threshold_data.get('enabled', True)
+        }
+
+        # Load project
+        project = db.load_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        # Initialize alert_thresholds if it doesn't exist
+        if 'alert_thresholds' not in project:
+            project['alert_thresholds'] = []
+
+        # Migrate any existing thresholds with problematic IDs
+        project['alert_thresholds'] = migrate_threshold_ids(project['alert_thresholds'])
+
+        # Add new threshold
+        project['alert_thresholds'].append(threshold)
+
+        # Save project
+        db.save_project(project)
+
+        return {
+            "success": True,
+            "id": threshold_id,
+            "threshold": threshold
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to create alert threshold for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to create alert threshold: {str(e)}")
+
+def migrate_threshold_ids(thresholds: list) -> list:
+    """Migrate any threshold IDs containing slashes to URL-safe format"""
+    migrated = []
+    for threshold in thresholds:
+        threshold_id = threshold.get('id', '')
+        if '/' in threshold_id:
+            # Generate new safe ID
+            topic_name = threshold.get('topic_name', '')
+            safe_topic = topic_name.replace('/', '_') if topic_name else 'unknown'
+            new_id = f"{safe_topic}_{str(uuid.uuid4())[:8]}"
+
+            # Create migrated threshold with new ID
+            migrated_threshold = threshold.copy()
+            migrated_threshold['id'] = new_id
+            migrated.append(migrated_threshold)
+            logger.info(f"Migrated threshold ID from '{threshold_id}' to '{new_id}'")
+        else:
+            migrated.append(threshold)
+
+    return migrated
+    """Create a new alert threshold"""
+    try:
+        # Validate required fields
+        if not threshold_data.get('topic_name'):
+            raise HTTPException(status_code=400, detail="topic_name is required")
+
+        # Generate URL-safe ID
+        safe_topic = threshold_data['topic_name'].replace('/', '_')
+        threshold_id = f"{safe_topic}_{str(uuid.uuid4())[:8]}"
+
+        # Create threshold object
+        threshold = {
+            'id': threshold_id,
+            'project_id': project_id,
+            'topic_name': threshold_data['topic_name'],
+            'sensor_type': threshold_data['topic_name'].split('/')[-1] if '/' in threshold_data['topic_name'] else threshold_data['topic_name'],
+            'min_value': threshold_data.get('min_value'),
+            'max_value': threshold_data.get('max_value'),
+            'enabled': threshold_data.get('enabled', True)
+        }
+
+        # Load project
+        project = db.load_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        # Add threshold to project
+        if 'alert_thresholds' not in project:
+            project['alert_thresholds'] = []
+        project['alert_thresholds'].append(threshold)
+
+        # Save project
+        db.save_project(project)
+
+        return {
+            "success": True,
+            "id": threshold_id,
+            "threshold": threshold
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to create alert threshold for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to create alert threshold: {str(e)}")
+
 @app.post("/api/projects/{project_id}/alerts/config")
 async def upload_alert_config(project_id: str, file: UploadFile = File(...)):
     """Upload CSV file with alert thresholds for sensors"""
@@ -960,8 +1080,12 @@ async def upload_alert_config(project_id: str, file: UploadFile = File(...)):
                 topic_parts = row['topic_name'].strip().split('/')
                 sensor_type = topic_parts[-1] if topic_parts else 'unknown'
 
+                # Generate URL-safe ID by replacing slashes with underscores and adding UUID
+                safe_topic = row['topic_name'].strip().replace('/', '_')
+                threshold_id = f"{safe_topic}_{row_num}_{str(uuid.uuid4())[:8]}"
+
                 alert_threshold = {
-                    'id': f"{project_id}_{row['topic_name']}_{row_num}",
+                    'id': threshold_id,
                     'topic_name': row['topic_name'].strip(),
                     'sensor_type': sensor_type,
                     'min_value': min_value,

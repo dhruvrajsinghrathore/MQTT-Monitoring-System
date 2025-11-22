@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Server, Clock, CheckCircle, AlertCircle, FileText, AlertTriangle, Upload, Trash2 } from 'lucide-react';
+import { Server, Clock, CheckCircle, AlertCircle, FileText, AlertTriangle, Upload, Trash2, Edit, Plus } from 'lucide-react';
 import { useProject } from '../contexts/ProjectContext';
 import { MQTTConfig, Project, DiscoveredNode, DomainDocument, AlertThreshold } from '../types';
 import { getApiUrl, API_ENDPOINTS } from '../config/api';
@@ -35,6 +35,16 @@ const ConfigurationPage: React.FC = () => {
   // Alert management
   const [alertThresholds, setAlertThresholds] = useState<AlertThreshold[]>([]);
   const [isUploadingCsv, setIsUploadingCsv] = useState(false);
+
+  // Edit threshold state
+  const [editingThreshold, setEditingThreshold] = useState<AlertThreshold | null>(null);
+  const [editMinValue, setEditMinValue] = useState('');
+  const [editMaxValue, setEditMaxValue] = useState('');
+
+  // Add threshold state
+  const [newTopicName, setNewTopicName] = useState('');
+  const [newMinValue, setNewMinValue] = useState('');
+  const [newMaxValue, setNewMaxValue] = useState('');
 
   const handleConfigChange = (field: keyof MQTTConfig, value: string | number) => {
     setConfig(prev => ({
@@ -192,6 +202,157 @@ const ConfigurationPage: React.FC = () => {
       alert(`Failed to upload CSV: ${error}`);
     } finally {
       setIsUploadingCsv(false);
+    }
+  };
+
+  // Threshold editing functions
+  const startEditing = (threshold: AlertThreshold) => {
+    setEditingThreshold(threshold);
+    setEditMinValue(threshold.min_value?.toString() || '');
+    setEditMaxValue(threshold.max_value?.toString() || '');
+  };
+
+  const cancelEditing = () => {
+    setEditingThreshold(null);
+    setEditMinValue('');
+    setEditMaxValue('');
+  };
+
+  const saveThresholdEdit = async () => {
+    if (!project?.id || !editingThreshold) return;
+
+    try {
+      const minValue = editMinValue.trim() ? parseFloat(editMinValue) : null;
+      const maxValue = editMaxValue.trim() ? parseFloat(editMaxValue) : null;
+
+      const response = await fetch(
+        getApiUrl(API_ENDPOINTS.ALERTS_CONFIG).replace('{project_id}', project.id).replace('/config', `/config/${editingThreshold.id}`),
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            min_value: minValue,
+            max_value: maxValue
+          })
+        }
+      );
+
+      if (response.ok) {
+        // Update local state
+        setAlertThresholds(prev => prev.map(t =>
+          t.id === editingThreshold.id
+            ? { ...t, min_value: minValue, max_value: maxValue }
+            : t
+        ));
+        cancelEditing();
+      } else {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || 'Failed to update threshold');
+      }
+    } catch (error) {
+      console.error('Failed to update threshold:', error);
+      alert(`Failed to update threshold: ${error}`);
+    }
+  };
+
+  const deleteThreshold = async (thresholdId: string) => {
+    if (!project?.id) return;
+
+    if (!confirm('Are you sure you want to delete this alert threshold?')) {
+      return;
+    }
+
+    try {
+      const response = await fetch(
+        getApiUrl(API_ENDPOINTS.ALERTS_CONFIG).replace('{project_id}', project.id).replace('/config', `/config/${thresholdId}`),
+        { method: 'DELETE' }
+      );
+
+      if (response.ok) {
+        // Update local state
+        setAlertThresholds(prev => prev.filter(t => t.id !== thresholdId));
+      } else {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || 'Failed to delete threshold');
+      }
+    } catch (error) {
+      console.error('Failed to delete threshold:', error);
+      alert(`Failed to delete threshold: ${error}`);
+    }
+  };
+
+  const toggleThreshold = async (thresholdId: string) => {
+    if (!project?.id) return;
+
+    try {
+      const response = await fetch(
+        getApiUrl(API_ENDPOINTS.ALERTS_CONFIG).replace('{project_id}', project.id).replace('/config', `/config/${thresholdId}/toggle`),
+        { method: 'PATCH' }
+      );
+
+      if (response.ok) {
+        // Update local state
+        setAlertThresholds(prev => prev.map(t =>
+          t.id === thresholdId ? { ...t, enabled: !t.enabled } : t
+        ));
+      } else {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || 'Failed to toggle threshold');
+      }
+    } catch (error) {
+      console.error('Failed to toggle threshold:', error);
+      alert(`Failed to toggle threshold: ${error}`);
+    }
+  };
+
+  const addThreshold = async () => {
+    if (!project?.id || !newTopicName.trim()) {
+      alert('Please enter a topic name');
+      return;
+    }
+
+    try {
+      const minValue = newMinValue.trim() ? parseFloat(newMinValue) : null;
+      const maxValue = newMaxValue.trim() ? parseFloat(newMaxValue) : null;
+
+      const response = await fetch(
+        getApiUrl(API_ENDPOINTS.ALERTS_CONFIG_THRESHOLD).replace('{project_id}', project.id),
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            topic_name: newTopicName.trim(),
+            min_value: minValue,
+            max_value: maxValue
+          })
+        }
+      );
+
+      if (response.ok) {
+        const result = await response.json();
+        // Update local state
+        const newThreshold: AlertThreshold = {
+          id: result.id || Date.now().toString(),
+          project_id: project.id,
+          topic_name: newTopicName.trim(),
+          sensor_type: newTopicName.split('/').pop() || 'unknown',
+          min_value: minValue,
+          max_value: maxValue,
+          enabled: true
+        };
+        setAlertThresholds(prev => [...prev, newThreshold]);
+
+        // Clear form
+        setNewTopicName('');
+        setNewMinValue('');
+        setNewMaxValue('');
+      } else {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || 'Failed to add threshold');
+      }
+    } catch (error) {
+      console.error('Failed to add threshold:', error);
+      alert(`Failed to add threshold: ${error}`);
     }
   };
 
@@ -618,6 +779,62 @@ const ConfigurationPage: React.FC = () => {
           </div>
         </div>
 
+        {/* Add New Threshold */}
+        <div className="minimal-card p-6">
+          <h3 className="text-md font-semibold text-gray-900 mb-4">Add New Threshold</h3>
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Topic Name
+                </label>
+                <input
+                  type="text"
+                  value={newTopicName}
+                  onChange={(e) => setNewTopicName(e.target.value)}
+                  placeholder="e.g., smr/compressor/temperature"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Minimum Value
+                </label>
+                <input
+                  type="number"
+                  step="any"
+                  value={newMinValue}
+                  onChange={(e) => setNewMinValue(e.target.value)}
+                  placeholder="Optional"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Maximum Value
+                </label>
+                <input
+                  type="number"
+                  step="any"
+                  value={newMaxValue}
+                  onChange={(e) => setNewMaxValue(e.target.value)}
+                  placeholder="Optional"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+            </div>
+            <div className="flex justify-end">
+              <button
+                onClick={addThreshold}
+                className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 transition-colors flex items-center gap-2"
+              >
+                <Plus className="w-4 h-4" />
+                Add Threshold
+              </button>
+            </div>
+          </div>
+        </div>
+
         {/* Thresholds List */}
         <div className="minimal-card p-6">
           <h3 className="text-md font-semibold text-gray-900 mb-4">Alert Thresholds ({alertThresholds.length})</h3>
@@ -631,23 +848,91 @@ const ConfigurationPage: React.FC = () => {
             <div className="space-y-3">
               {alertThresholds.map((threshold) => (
                 <div key={threshold.id} className="p-4 border border-gray-200 rounded-lg">
-                  <div className="flex items-center justify-between">
-                    <div>
+                  {editingThreshold?.id === threshold.id ? (
+                    // Edit mode
+                    <div className="space-y-3">
                       <div className="font-medium text-gray-900">{threshold.topic_name}</div>
-                      <div className="text-sm text-gray-600">
-                        Sensor: {threshold.sensor_type}
-                        {threshold.min_value !== null && ` • Min: ${threshold.min_value}`}
-                        {threshold.max_value !== null && ` • Max: ${threshold.max_value}`}
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Minimum Value
+                          </label>
+                          <input
+                            type="number"
+                            step="any"
+                            value={editMinValue}
+                            onChange={(e) => setEditMinValue(e.target.value)}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            placeholder="Leave empty for no minimum"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Maximum Value
+                          </label>
+                          <input
+                            type="number"
+                            step="any"
+                            value={editMaxValue}
+                            onChange={(e) => setEditMaxValue(e.target.value)}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            placeholder="Leave empty for no maximum"
+                          />
+                        </div>
+                      </div>
+                      <div className="flex justify-end gap-2">
+                        <button
+                          onClick={cancelEditing}
+                          className="px-3 py-1 text-sm text-gray-600 hover:text-gray-800 transition-colors"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          onClick={saveThresholdEdit}
+                          className="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
+                        >
+                          Save
+                        </button>
                       </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <span className={`px-2 py-1 text-xs rounded-full ${
-                        threshold.enabled ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'
-                      }`}>
-                        {threshold.enabled ? 'Enabled' : 'Disabled'}
-                      </span>
+                  ) : (
+                    // Display mode
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="font-medium text-gray-900">{threshold.topic_name}</div>
+                        <div className="text-sm text-gray-600">
+                          Sensor: {threshold.sensor_type}
+                          {threshold.min_value !== null && ` • Min: ${threshold.min_value}`}
+                          {threshold.max_value !== null && ` • Max: ${threshold.max_value}`}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => toggleThreshold(threshold.id)}
+                          className={`px-2 py-1 text-xs rounded-full cursor-pointer transition-colors ${
+                            threshold.enabled ? 'bg-green-100 text-green-800 hover:bg-green-200' : 'bg-gray-100 text-gray-800 hover:bg-gray-200'
+                          }`}
+                          title={threshold.enabled ? 'Disable threshold' : 'Enable threshold'}
+                        >
+                          {threshold.enabled ? 'Enabled' : 'Disabled'}
+                        </button>
+                        <button
+                          onClick={() => startEditing(threshold)}
+                          className="p-1 text-gray-400 hover:text-blue-600 transition-colors"
+                          title="Edit threshold"
+                        >
+                          <Edit className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => deleteThreshold(threshold.id)}
+                          className="p-1 text-gray-400 hover:text-red-600 transition-colors"
+                          title="Delete threshold"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
                     </div>
-                  </div>
+                  )}
                 </div>
               ))}
             </div>

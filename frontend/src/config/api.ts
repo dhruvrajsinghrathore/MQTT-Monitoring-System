@@ -17,6 +17,7 @@ export const API_ENDPOINTS = {
 
   // Alert endpoints
   ALERTS_CONFIG: '/api/projects/{project_id}/alerts/config',
+  ALERTS_CONFIG_THRESHOLD: '/api/projects/{project_id}/alerts/config/threshold',
   ALERTS_ACTIVE: '/api/projects/{project_id}/alerts/active',
   ALERTS_HISTORY: '/api/projects/{project_id}/alerts/history',
   ALERTS_STATS: '/api/projects/{project_id}/alerts/stats',
