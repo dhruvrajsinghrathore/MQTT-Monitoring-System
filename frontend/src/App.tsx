@@ -2,6 +2,7 @@ import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import { ProjectProvider } from './contexts/ProjectContext';
 import ProjectsPage from './pages/ProjectsPage';
 import CreateProjectPage from './pages/CreateProjectPage';
+import ConfigurationPage from './pages/ConfigurationPage';
 import GraphEditorPage from './pages/GraphEditorPage';
 import MonitoringPage from './pages/MonitoringPage';
 import EquipmentDetailPage from './pages/EquipmentDetailPage';
@@ -14,6 +15,7 @@ function App() {
           <Routes>
             <Route path="/" element={<ProjectsPage />} />
             <Route path="/config" element={<CreateProjectPage />} />
+            <Route path="/config/:projectId" element={<ConfigurationPage />} />
             <Route path="/editor" element={<GraphEditorPage />} />
             <Route path="/monitor" element={<MonitoringPage />} />
             <Route path="/equipment/:equipmentId" element={<EquipmentDetailPage />} />

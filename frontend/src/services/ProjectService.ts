@@ -3,25 +3,95 @@ import { Project, ProjectSummary, ProjectExport } from '../types';
 
 const STORAGE_KEY = 'mqtt_workflow_projects';
 const STORAGE_VERSION = '1.0';
+const API_BASE_URL = 'http://localhost:8001/api';
 
 export class ProjectService {
   
-  static saveProject(project: Project): void {
-    const projects = this.getAllProjects();
+  static async saveProject(project: Project): Promise<void> {
+    try {
+      project.updated_at = new Date().toISOString();
+
+      // Save to backend
+      const isExisting = await this.projectExistsOnBackend(project.id);
+      const method = isExisting ? 'PUT' : 'POST';
+      const url = isExisting
+        ? `${API_BASE_URL}/projects/${project.id}`
+        : `${API_BASE_URL}/projects`;
+
+      const response = await fetch(url, {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(project),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to save project: ${response.statusText}`);
+      }
+
+      console.log(`💾 ${isExisting ? 'Updated' : 'Created'} project on backend: ${project.name}`);
+
+      // Also save to localStorage as cache
+      this.saveProjectLocally(project);
+    } catch (error) {
+      console.error('Failed to save to backend, saving locally only:', error);
+      // Fallback to localStorage only
+      this.saveProjectLocally(project);
+    }
+  }
+
+  static saveProjectLocally(project: Project): void {
+    const projects = this.getAllProjectsSync();
     const existingIndex = projects.findIndex(p => p.id === project.id);
-    
-    project.updated_at = new Date().toISOString();
-    
+
     if (existingIndex >= 0) {
       projects[existingIndex] = project;
     } else {
       projects.push(project);
     }
-    
+
     localStorage.setItem(STORAGE_KEY, JSON.stringify(projects));
   }
+
+  static async projectExistsOnBackend(projectId: string): Promise<boolean> {
+    try {
+      const response = await fetch(`${API_BASE_URL}/projects/${projectId}`);
+      return response.ok;
+    } catch {
+      return false;
+    }
+  }
   
-  static getAllProjects(): Project[] {
+  static async getAllProjects(): Promise<Project[]> {
+    try {
+      // Try to load from backend first
+      const response = await fetch(`${API_BASE_URL}/projects`);
+      if (response.ok) {
+        const data = await response.json();
+        const backendProjects = data.projects || [];
+
+        // Update localStorage cache with backend data
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(backendProjects));
+        console.log(`📥 Loaded ${backendProjects.length} projects from backend`);
+
+        return backendProjects;
+      }
+    } catch (error) {
+      console.error('Failed to load from backend, using localStorage:', error);
+    }
+
+    // Fallback to localStorage
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY);
+      return stored ? JSON.parse(stored) : [];
+    } catch (error) {
+      console.error('Error loading projects:', error);
+      return [];
+    }
+  }
+
+  static getAllProjectsSync(): Project[] {
     try {
       const stored = localStorage.getItem(STORAGE_KEY);
       return stored ? JSON.parse(stored) : [];
@@ -31,8 +101,8 @@ export class ProjectService {
     }
   }
   
-  static getProjectSummaries(): ProjectSummary[] {
-    const projects = this.getAllProjects();
+  static async getProjectSummaries(): Promise<ProjectSummary[]> {
+    const projects = await this.getAllProjects();
     return projects.map(project => ({
       id: project.id,
       name: project.name,
@@ -41,28 +111,59 @@ export class ProjectService {
       updated_at: project.updated_at,
       last_accessed: project.last_accessed,
       is_favorite: project.is_favorite || false,
-      node_count: project.graph_layout.nodes.length,
-      equipment_types: [...new Set(project.discovered_nodes.map(n => n.equipment_type))],
+      node_count: (project.graph_layout?.nodes || []).length,
+      equipment_types: [...new Set((project.discovered_nodes || []).map(n => n.equipment_type))],
       broker_host: project.mqtt_config.broker_host
     }));
   }
   
-  static getProject(id: string): Project | null {
-    const projects = this.getAllProjects();
-    const project = projects.find(p => p.id === id);
-    
-    if (project) {
-      // Update last accessed time
-      project.last_accessed = new Date().toISOString();
-      this.saveProject(project);
+  static async getProject(id: string): Promise<Project | null> {
+    try {
+      // Try to load from backend first
+      const response = await fetch(`${API_BASE_URL}/projects/${id}`);
+      if (response.ok) {
+        const project = await response.json();
+        console.log(`📥 Loaded project from backend: ${project.name}`);
+
+        // Update last accessed and save locally as cache
+        project.last_accessed = new Date().toISOString();
+        this.saveProjectLocally(project);
+
+        return project;
+      }
+    } catch (error) {
+      console.error('Failed to load from backend, trying localStorage:', error);
     }
-    
+
+    // Fallback to localStorage
+    const projects = this.getAllProjectsSync();
+    const project = projects.find(p => p.id === id);
+
+    if (project) {
+      // Update last accessed
+      project.last_accessed = new Date().toISOString();
+      this.saveProjectLocally(project);
+    }
+
     return project || null;
   }
   
-  static deleteProject(id: string): boolean {
+  static async deleteProject(id: string): Promise<boolean> {
     try {
-      const projects = this.getAllProjects();
+      // Delete from backend first
+      const response = await fetch(`${API_BASE_URL}/projects/${id}`, {
+        method: 'DELETE',
+      });
+
+      if (response.ok) {
+        console.log(`🗑️ Deleted project from backend: ${id}`);
+      } else if (response.status !== 404) {
+        // 404 is ok (project doesn't exist), other errors are problems
+        throw new Error(`Failed to delete from backend: ${response.statusText}`);
+      }
+
+      // Also delete from localStorage
+      const projects = this.getAllProjectsSync();
       const filteredProjects = projects.filter(p => p.id !== id);
       localStorage.setItem(STORAGE_KEY, JSON.stringify(filteredProjects));
       return true;
@@ -72,18 +173,18 @@ export class ProjectService {
     }
   }
   
-  static toggleFavorite(id: string): boolean {
+  static async toggleFavorite(id: string): Promise<boolean> {
     try {
-      const projects = this.getAllProjects();
+      const projects = await this.getAllProjects();
       const project = projects.find(p => p.id === id);
-      
+
       if (project) {
         project.is_favorite = !project.is_favorite;
         project.updated_at = new Date().toISOString();
-        this.saveProject(project);
+        await this.saveProject(project);
         return true;
       }
-      
+
       return false;
     } catch (error) {
       console.error('Error toggling favorite:', error);

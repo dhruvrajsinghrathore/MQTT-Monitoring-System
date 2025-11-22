@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tools.tdengine_tool import execute_tdengine_query, get_tdengine_schema
+from tools.vector_search_tool import search_domain_knowledge
 from tdengine_service import tdengine_service
 from tamu_agent_demo import TAMUSAILLM
 
@@ -138,6 +139,8 @@ class ChatbotCrew:
                             tools.append(execute_tdengine_query)
                         elif tool_name == 'get_tdengine_schema':
                             tools.append(get_tdengine_schema)
+                        elif tool_name == 'search_domain_knowledge':
+                            tools.append(search_domain_knowledge)
                 
                 # Create agent
                 agent = Agent(

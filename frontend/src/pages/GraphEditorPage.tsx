@@ -15,11 +15,11 @@ import {
   ReactFlowInstance,
   BackgroundVariant
 } from 'reactflow';
-import { Save, Play, ArrowLeft, Plus, Grid, RefreshCw } from 'lucide-react';
+import { Save, Play, ArrowLeft, Plus, Grid, RefreshCw, Upload, X } from 'lucide-react';
 import { useProject } from '../contexts/ProjectContext';
 import { DiscoveredNode, Project } from '../types';
 import { ProjectService } from '../services/ProjectService';
-import { getApiUrl, API_ENDPOINTS } from '../config/api';
+import { getApiUrl, getApiUrlWithParams, API_ENDPOINTS, API_BASE_URL } from '../config/api';
 
 import 'reactflow/dist/style.css';
 
@@ -40,6 +40,9 @@ const GraphEditorPage: React.FC = () => {
   
   // Initialize discovered nodes from project, but also fetch fresh data on mount
   const [discoveredNodes, setDiscoveredNodes] = useState<DiscoveredNode[]>([]);
+
+  // Image upload states
+  const [uploadingImages, setUploadingImages] = useState<Set<string>>(new Set());
   
   // Fetch discovered nodes on component mount
   useEffect(() => {
@@ -60,7 +63,7 @@ const GraphEditorPage: React.FC = () => {
               discovered_nodes: freshDiscoveredNodes,
               updated_at: new Date().toISOString()
             };
-            ProjectService.saveProject(updatedProject);
+            await ProjectService.saveProject(updatedProject);
           }
         } else {
           // Fallback to project's discovered nodes
@@ -155,38 +158,49 @@ const GraphEditorPage: React.FC = () => {
     [reactFlowInstance, setNodes]
   );
 
-  const saveGraph = () => {
+  const saveGraph = async () => {
     if (project) {
-      // Update project with new graph layout
-      const updatedProject = {
-        ...project,
-        graph_layout: { nodes, edges },
-        updated_at: new Date().toISOString()
-      };
-      
-      // Save to localStorage
-      ProjectService.saveProject(updatedProject);
-      
-      // Update context
-      updateGraphLayout(nodes, edges);
-      
-      alert('Graph layout saved!');
+      try {
+        // Update project with new graph layout
+        const updatedProject = {
+          ...project,
+          graph_layout: { nodes, edges },
+          updated_at: new Date().toISOString()
+        };
+
+        // Save to backend and localStorage
+        await ProjectService.saveProject(updatedProject);
+
+        // Update context
+        updateGraphLayout(nodes, edges);
+
+        alert('Graph layout saved!');
+      } catch (error) {
+        console.error('Failed to save graph:', error);
+        alert('Failed to save graph layout. Please try again.');
+      }
     }
   };
 
-  const startMonitoring = () => {
+  const startMonitoring = async () => {
     if (project) {
-      // Save graph first
-      const updatedProject = {
-        ...project,
-        graph_layout: { nodes, edges },
-        updated_at: new Date().toISOString()
-      };
-      
-      ProjectService.saveProject(updatedProject);
-      updateGraphLayout(nodes, edges);
-      
-      navigate('/monitor', { state: { project: updatedProject } });
+      try {
+        // Save graph first
+        const updatedProject = {
+          ...project,
+          graph_layout: { nodes, edges },
+          updated_at: new Date().toISOString()
+        };
+
+        await ProjectService.saveProject(updatedProject);
+        updateGraphLayout(nodes, edges);
+
+        navigate('/monitor', { state: { project: updatedProject } });
+      } catch (error) {
+        console.error('Failed to save project before monitoring:', error);
+        // Still navigate but with unsaved changes
+        navigate('/monitor', { state: { project } });
+      }
     }
   };
 
@@ -305,7 +319,7 @@ const GraphEditorPage: React.FC = () => {
       };
       
       // Save updated project
-      ProjectService.saveProject(updatedProject);
+      await ProjectService.saveProject(updatedProject);
       
       // Update local state
       setDiscoveredNodes(newDiscoveredNodes);
@@ -327,6 +341,95 @@ const GraphEditorPage: React.FC = () => {
     } finally {
       setIsRediscovering(false);
     }
+  };
+
+  const uploadNodeImage = async (equipmentId: string, file: File) => {
+    if (!project) return;
+
+    setUploadingImages(prev => new Set(prev).add(equipmentId));
+
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const response = await fetch(
+        getApiUrlWithParams(API_ENDPOINTS.NODE_IMAGE, { project_id: project.id, equipment_id: equipmentId }),
+        {
+          method: 'POST',
+          body: formData
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error(`Upload failed: ${response.status}`);
+      }
+
+      const result = await response.json();
+
+      // Update the discovered nodes with the image URL
+      setDiscoveredNodes(prevNodes =>
+        prevNodes.map(node =>
+          node.equipment_id === equipmentId
+            ? { ...node, image_url: result.image_url }
+            : node
+        )
+      );
+
+      // Update existing nodes on canvas with the image URL
+      setNodes(prevNodes =>
+        prevNodes.map(node =>
+          node.data.equipment_id === equipmentId
+            ? {
+                ...node,
+                data: {
+                  ...node.data,
+                  image_url: result.image_url
+                }
+              }
+            : node
+        )
+      );
+
+      console.log(`✅ Image uploaded for ${equipmentId}:`, result.image_url);
+
+    } catch (error) {
+      console.error(`❌ Failed to upload image for ${equipmentId}:`, error);
+      alert(`Failed to upload image: ${error}`);
+    } finally {
+      setUploadingImages(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(equipmentId);
+        return newSet;
+      });
+    }
+  };
+
+  const removeNodeImage = (equipmentId: string) => {
+    // Remove image from discovered nodes
+    setDiscoveredNodes(prevNodes =>
+      prevNodes.map(node =>
+        node.equipment_id === equipmentId
+          ? { ...node, image_url: undefined }
+          : node
+      )
+    );
+
+    // Remove image from existing nodes on canvas
+    setNodes(prevNodes =>
+      prevNodes.map(node =>
+        node.data.equipment_id === equipmentId
+          ? {
+              ...node,
+              data: {
+                ...node.data,
+                image_url: undefined
+              }
+            }
+          : node
+      )
+    );
+
+    console.log(`🗑️ Image removed for ${equipmentId}`);
   };
 
   if (!project) {
@@ -383,28 +486,86 @@ const GraphEditorPage: React.FC = () => {
                 <p className="text-xs text-gray-400">Run discovery in project settings to find equipment</p>
               </div>
             ) : (
-              availableNodes.map((node: DiscoveredNode) => (
-              <div
-                key={node.equipment_id}
-                className="p-3 bg-gray-50 rounded-lg border border-gray-200 cursor-move hover:bg-gray-100 transition-colors"
-                draggable
-                onDragStart={(event) => {
-                  event.dataTransfer.setData('application/reactflow', 'default');
-                  event.dataTransfer.setData('application/json', JSON.stringify(node));
-                }}
-              >
-                <div className="flex items-center mb-1">
-                  <Plus className="w-4 h-4 text-gray-400 mr-2" />
-                  <h3 className="font-medium text-gray-900 text-sm">{node.equipment_id}</h3>
-                </div>
-                <p className="text-xs text-gray-600 mb-1">{node.equipment_type}</p>
-                <p className="text-xs text-gray-500">{node.message_count} messages</p>
-                <div className="text-xs text-gray-400 mt-1">
-                  {node.topics.slice(0, 2).map(topic => topic.split('/').pop()).join(', ')}
-                  {node.topics.length > 2 && '...'}
-                </div>
-              </div>
-              ))
+              availableNodes.map((node: DiscoveredNode) => {
+                const isUploading = uploadingImages.has(node.equipment_id);
+
+                return (
+                  <div
+                    key={node.equipment_id}
+                    className="p-3 bg-gray-50 rounded-lg border border-gray-200 cursor-move hover:bg-gray-100 transition-colors"
+                  >
+                    {/* Node Header */}
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center">
+                        <Plus className="w-4 h-4 text-gray-400 mr-2" />
+                        <h3 className="font-medium text-gray-900 text-sm">{node.equipment_id}</h3>
+                      </div>
+
+                      {/* Image Upload Button */}
+                      <label className="cursor-pointer">
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) {
+                              uploadNodeImage(node.equipment_id, file);
+                            }
+                          }}
+                          disabled={isUploading}
+                        />
+                        <Upload className={`w-4 h-4 ${isUploading ? 'text-gray-400' : 'text-blue-500 hover:text-blue-600'} transition-colors`} />
+                      </label>
+                    </div>
+
+                    {/* Node Info */}
+                    <p className="text-xs text-gray-600 mb-1">{node.equipment_type}</p>
+                    <p className="text-xs text-gray-500">{node.message_count} messages</p>
+                    <div className="text-xs text-gray-400 mt-1">
+                      {node.topics.slice(0, 2).map(topic => topic.split('/').pop()).join(', ')}
+                      {node.topics.length > 2 && '...'}
+                    </div>
+
+                    {/* Image Preview */}
+                    {node.image_url && (
+                      <div className="mt-2 relative">
+                        <img
+                          src={`${API_BASE_URL}${node.image_url}`}
+                          alt={`${node.equipment_id} image`}
+                          className="w-full h-16 object-cover rounded border"
+                        />
+                        <button
+                          onClick={() => removeNodeImage(node.equipment_id)}
+                          className="absolute top-1 right-1 bg-red-500 text-white rounded-full p-1 hover:bg-red-600 transition-colors"
+                          title="Remove image"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Upload Status */}
+                    {isUploading && (
+                      <div className="mt-2 text-xs text-blue-600">
+                        Uploading image...
+                      </div>
+                    )}
+
+                    {/* Drag Handle */}
+                    <div
+                      draggable
+                      onDragStart={(event) => {
+                        event.dataTransfer.setData('application/reactflow', 'default');
+                        event.dataTransfer.setData('application/json', JSON.stringify(node));
+                      }}
+                      className="mt-2 w-full h-6 bg-gray-200 rounded cursor-move flex items-center justify-center text-xs text-gray-600"
+                    >
+                      Drag to canvas
+                    </div>
+                  </div>
+                );
+              })
             )}
           </div>
         </div>

@@ -17,6 +17,7 @@ export interface NodeData {
   status: string;
   last_updated: string;
   workflow_step?: string;
+  image_url?: string;
 }
 
 export interface SensorReading {
@@ -24,6 +25,44 @@ export interface SensorReading {
   value: number | string | object;
   unit: string;
   timestamp: string;
+}
+
+// Domain Knowledge types
+export interface DomainDocument {
+  id: string;
+  filename: string;
+  file_type: string; // 'pdf', 'docx', 'txt', 'md', etc.
+  equipment_id?: string; // Optional - if associated with specific equipment
+  sensor_type?: string; // Optional - if associated with specific sensor type
+  uploaded_at: string;
+  file_size: number;
+  chunk_count?: number; // Number of chunks after processing
+}
+
+// Alert types
+export interface AlertThreshold {
+  id: string;
+  topic_name: string; // e.g., "cell/1/temperature" or just "temperature"
+  sensor_type: string;
+  min_value?: number;
+  max_value?: number;
+  enabled: boolean;
+  created_at: string;
+}
+
+export interface Alert {
+  id: string;
+  equipment_id: string;
+  sensor_type: string;
+  topic: string;
+  current_value: number;
+  threshold_value: number;
+  threshold_type: 'min' | 'max';
+  severity: 'warning' | 'critical';
+  message: string;
+  timestamp: string;
+  resolved: boolean;
+  resolved_at?: string;
 }
 
 // Enhanced Project types with persistence
@@ -37,6 +76,8 @@ export interface Project {
     nodes: any[];
     edges: any[];
   };
+  domain_documents?: DomainDocument[];
+  alert_thresholds?: AlertThreshold[];
   created_at: string;
   updated_at: string;
   last_accessed?: string;
@@ -69,6 +110,7 @@ export interface DiscoveredNode {
   message_count: number;
   first_seen: string;
   last_seen: string;
+  image_url?: string; // Added for node image support
 }
 
 // API Response types

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 
 import asyncio
+import csv
+import io
 import json
 import logging
 import threading
@@ -9,12 +11,15 @@ import os
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import paho.mqtt.client as mqtt
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from database_service import db
+from alert_service import alert_service
+from vectorstore_service import vector_store
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
@@ -47,11 +52,15 @@ class GraphDataManager:
     def set_project(self, project):
         """Set the current project and initialize nodes from project data"""
         self.project = project
-        
+
         # ALWAYS clear existing data when setting a new project
         self.nodes_data = {}
         self.sensor_data = {}
-        
+
+        # Set up alert thresholds for the project
+        if project and project.get('alert_thresholds'):
+            alert_service.set_project_thresholds(project.get('id', ''), project['alert_thresholds'])
+
         if project and project.get('graph_layout', {}).get('nodes'):
             logger.info(f"🔍 GraphDataManager initializing with {len(project['graph_layout']['nodes'])} nodes from project")
             for node in project['graph_layout']['nodes']:
@@ -69,7 +78,7 @@ class GraphDataManager:
                     }
                 }
                 self.sensor_data[equipment_id] = {}
-            
+
             logger.info(f"🔍 GraphDataManager initialized with nodes: {list(self.nodes_data.keys())}")
         else:
             logger.info("🔍 No graph layout nodes found in project")
@@ -406,7 +415,13 @@ class MQTTMonitoring:
                 }
                 
                 graph_manager.update_sensor_data(equipment_id, sensor_type, sensor_reading)
-                
+
+                # Evaluate sensor reading against alert thresholds
+                alert = alert_service.evaluate_sensor_reading(
+                    equipment_id, sensor_type, value, topic,
+                    datetime.now().isoformat(), self.project_id or ''
+                )
+
                 # Only send graph updates if enough time has passed (throttling)
                 if graph_manager.should_send_update():
                     graph_data = graph_manager.get_graph_data()
@@ -414,10 +429,21 @@ class MQTTMonitoring:
                         'type': 'graph_update',
                         'data': graph_data
                     }
-                    
+
                     # Send to all connected WebSocket clients - use thread-safe approach
                     if main_loop and not main_loop.is_closed():
                         asyncio.run_coroutine_threadsafe(broadcast_to_websockets(message), main_loop)
+
+                # Send alert updates immediately (not throttled)
+                if alert:
+                    alert_message = {
+                        'type': 'alert_update',
+                        'data': alert
+                    }
+
+                    # Send alert to all connected WebSocket clients
+                    if main_loop and not main_loop.is_closed():
+                        asyncio.run_coroutine_threadsafe(broadcast_to_websockets(alert_message), main_loop)
                     
                 # Store message in database if session is active
                 if self.current_session_id and self.project_id:
@@ -829,6 +855,725 @@ async def get_available_cells():
     except Exception as e:
         logger.error(f"Failed to get available cells: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/projects/{project_id}/nodes/{equipment_id}/image")
+async def upload_node_image(project_id: str, equipment_id: str, file: UploadFile = File(...)):
+    """Upload an image for a specific node/equipment"""
+    try:
+        # Validate file type
+        allowed_types = ["image/png", "image/jpeg", "image/jpg", "image/svg+xml", "image/gif"]
+        if file.content_type not in allowed_types:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid file type: {file.content_type}. Allowed: PNG, JPG, SVG, GIF"
+            )
+
+        # Create project images directory
+        images_dir = os.path.join(os.path.dirname(__file__), 'data', 'projects', project_id, 'images')
+        os.makedirs(images_dir, exist_ok=True)
+
+        # Generate filename with equipment_id
+        file_extension = os.path.splitext(file.filename)[1] if file.filename else '.png'
+        filename = f"{equipment_id}{file_extension}"
+        file_path = os.path.join(images_dir, filename)
+
+        # Save the uploaded file
+        contents = await file.read()
+        with open(file_path, 'wb') as f:
+            f.write(contents)
+
+        # Return the relative path that frontend can use
+        image_url = f"/api/projects/{project_id}/images/{filename}"
+
+        logger.info(f"Uploaded image for equipment {equipment_id} in project {project_id}")
+        return {
+            "success": True,
+            "image_url": image_url,
+            "equipment_id": equipment_id,
+            "filename": filename,
+            "file_size": len(contents)
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to upload image for {equipment_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to upload image: {str(e)}")
+
+@app.get("/api/projects/{project_id}/images/{filename}")
+async def get_node_image(project_id: str, filename: str):
+    """Serve uploaded node images"""
+    try:
+        from fastapi.responses import FileResponse
+
+        file_path = os.path.join(os.path.dirname(__file__), 'data', 'projects', project_id, 'images', filename)
+
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail="Image not found")
+
+        return FileResponse(file_path, media_type='image/*')
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to serve image {filename}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to serve image: {str(e)}")
+
+@app.post("/api/projects/{project_id}/alerts/config")
+async def upload_alert_config(project_id: str, file: UploadFile = File(...)):
+    """Upload CSV file with alert thresholds for sensors"""
+    try:
+        # Validate file type
+        if not file.filename.endswith('.csv'):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid file type. Only CSV files are allowed."
+            )
+
+        # Read CSV content
+        content = await file.read()
+        csv_content = content.decode('utf-8')
+
+        # Parse CSV
+        csv_reader = csv.DictReader(io.StringIO(csv_content))
+
+        # Validate CSV headers
+        required_headers = ['topic_name', 'min_value', 'max_value']
+        if not all(header in csv_reader.fieldnames for header in required_headers):
+            raise HTTPException(
+                status_code=400,
+                detail=f"CSV must contain columns: {', '.join(required_headers)}"
+            )
+
+        alert_thresholds = []
+        for row_num, row in enumerate(csv_reader, start=2):  # Start at 2 to account for header
+            try:
+                # Parse values - allow empty strings for optional thresholds
+                min_value = float(row['min_value']) if row['min_value'].strip() else None
+                max_value = float(row['max_value']) if row['max_value'].strip() else None
+
+                # At least one threshold must be specified
+                if min_value is None and max_value is None:
+                    raise ValueError("At least one of min_value or max_value must be specified")
+
+                # Extract sensor type from topic (last part after '/')
+                topic_parts = row['topic_name'].strip().split('/')
+                sensor_type = topic_parts[-1] if topic_parts else 'unknown'
+
+                alert_threshold = {
+                    'id': f"{project_id}_{row['topic_name']}_{row_num}",
+                    'topic_name': row['topic_name'].strip(),
+                    'sensor_type': sensor_type,
+                    'min_value': min_value,
+                    'max_value': max_value,
+                    'enabled': True,
+                    'created_at': datetime.now().isoformat()
+                }
+
+                alert_thresholds.append(alert_threshold)
+
+            except ValueError as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Row {row_num}: Invalid numeric value in min_value or max_value - {str(e)}"
+                )
+            except Exception as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Row {row_num}: Error parsing row - {str(e)}"
+                )
+
+        if not alert_thresholds:
+            raise HTTPException(status_code=400, detail="No valid alert thresholds found in CSV")
+
+        # Load existing project
+        from database_service import db
+        project = db.load_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        # Update project with alert thresholds
+        project['alert_thresholds'] = alert_thresholds
+        project['updated_at'] = datetime.now().isoformat()
+
+        # Save updated project
+        db.save_project(project)
+
+        logger.info(f"Uploaded {len(alert_thresholds)} alert thresholds for project {project_id}")
+
+        return {
+            "success": True,
+            "alert_thresholds": alert_thresholds,
+            "count": len(alert_thresholds),
+            "message": f"Successfully uploaded {len(alert_thresholds)} alert thresholds"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to upload alert config for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to upload alert config: {str(e)}")
+
+@app.get("/api/projects/{project_id}/alerts/config")
+async def get_alert_config(project_id: str):
+    """Get alert thresholds for a project"""
+    try:
+        from database_service import db
+        project = db.load_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        alert_thresholds = project.get('alert_thresholds', [])
+
+        return {
+            "alert_thresholds": alert_thresholds,
+            "count": len(alert_thresholds)
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get alert config for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get alert config: {str(e)}")
+
+@app.get("/api/projects/{project_id}/alerts/active")
+async def get_active_alerts(project_id: str, equipment_id: Optional[str] = None):
+    """Get active alerts for a project"""
+    try:
+        active_alerts = alert_service.get_active_alerts(equipment_id)
+
+        return {
+            "alerts": active_alerts,
+            "count": len(active_alerts)
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to get active alerts for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get active alerts: {str(e)}")
+
+@app.get("/api/projects/{project_id}/alerts/history")
+async def get_alert_history(project_id: str, limit: int = 50, equipment_id: Optional[str] = None):
+    """Get alert history for a project"""
+    try:
+        history = alert_service.get_alert_history(limit, equipment_id)
+
+        return {
+            "alerts": history,
+            "count": len(history)
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to get alert history for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get alert history: {str(e)}")
+
+@app.delete("/api/projects/{project_id}/alerts/resolved")
+async def clear_resolved_alerts(project_id: str, older_than_hours: int = 24):
+    """Clear resolved alerts older than specified hours"""
+    try:
+        alert_service.clear_resolved_alerts(older_than_hours)
+        return {"message": f"Cleared resolved alerts older than {older_than_hours} hours"}
+
+    except Exception as e:
+        logger.error(f"Failed to clear resolved alerts for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to clear resolved alerts: {str(e)}")
+
+@app.get("/api/projects/{project_id}/alerts/stats")
+async def get_alert_stats(project_id: str):
+    """Get alert statistics for a project"""
+    try:
+        stats = alert_service.get_alert_stats()
+
+        return stats
+
+    except Exception as e:
+        logger.error(f"Failed to get alert stats for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get alert stats: {str(e)}")
+
+@app.put("/api/projects/{project_id}/alerts/config/{threshold_id}")
+async def update_alert_threshold(project_id: str, threshold_id: str, threshold_data: dict):
+    """Update a specific alert threshold"""
+    try:
+        from database_service import db
+        project = db.load_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        thresholds = project.get('alert_thresholds', [])
+        threshold_index = None
+
+        for i, threshold in enumerate(thresholds):
+            if threshold['id'] == threshold_id:
+                threshold_index = i
+                break
+
+        if threshold_index is None:
+            raise HTTPException(status_code=404, detail="Threshold not found")
+
+        # Validate threshold data
+        min_value = threshold_data.get('min_value')
+        max_value = threshold_data.get('max_value')
+
+        if min_value is not None and not isinstance(min_value, (int, float)):
+            raise HTTPException(status_code=400, detail="min_value must be a number")
+        if max_value is not None and not isinstance(max_value, (int, float)):
+            raise HTTPException(status_code=400, detail="max_value must be a number")
+
+        # At least one threshold must be specified
+        if min_value is None and max_value is None:
+            raise HTTPException(status_code=400, detail="At least one of min_value or max_value must be specified")
+
+        # Update threshold
+        thresholds[threshold_index].update({
+            'min_value': min_value,
+            'max_value': max_value,
+            'enabled': threshold_data.get('enabled', thresholds[threshold_index].get('enabled', True))
+        })
+
+        # Update project
+        project['alert_thresholds'] = thresholds
+        project['updated_at'] = datetime.now().isoformat()
+        db.save_project(project)
+
+        logger.info(f"Updated alert threshold {threshold_id} for project {project_id}")
+
+        return {
+            "success": True,
+            "threshold": thresholds[threshold_index]
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update alert threshold {threshold_id} for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to update threshold: {str(e)}")
+
+@app.delete("/api/projects/{project_id}/alerts/config/{threshold_id}")
+async def delete_alert_threshold(project_id: str, threshold_id: str):
+    """Delete a specific alert threshold"""
+    try:
+        from database_service import db
+        project = db.load_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        thresholds = project.get('alert_thresholds', [])
+        threshold_index = None
+
+        for i, threshold in enumerate(thresholds):
+            if threshold['id'] == threshold_id:
+                threshold_index = i
+                break
+
+        if threshold_index is None:
+            raise HTTPException(status_code=404, detail="Threshold not found")
+
+        # Remove threshold
+        deleted_threshold = thresholds.pop(threshold_index)
+
+        # Update project
+        project['alert_thresholds'] = thresholds
+        project['updated_at'] = datetime.now().isoformat()
+        db.save_project(project)
+
+        logger.info(f"Deleted alert threshold {threshold_id} for project {project_id}")
+
+        return {
+            "success": True,
+            "message": f"Threshold '{deleted_threshold.get('topic_name', threshold_id)}' deleted successfully"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete alert threshold {threshold_id} for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete threshold: {str(e)}")
+
+@app.patch("/api/projects/{project_id}/alerts/config/{threshold_id}/toggle")
+async def toggle_alert_threshold(project_id: str, threshold_id: str):
+    """Toggle enable/disable status of a specific alert threshold"""
+    try:
+        from database_service import db
+        project = db.load_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        thresholds = project.get('alert_thresholds', [])
+        threshold_index = None
+
+        for i, threshold in enumerate(thresholds):
+            if threshold['id'] == threshold_id:
+                threshold_index = i
+                break
+
+        if threshold_index is None:
+            raise HTTPException(status_code=404, detail="Threshold not found")
+
+        # Toggle enabled status
+        current_status = thresholds[threshold_index].get('enabled', True)
+        thresholds[threshold_index]['enabled'] = not current_status
+
+        # Update project
+        project['alert_thresholds'] = thresholds
+        project['updated_at'] = datetime.now().isoformat()
+        db.save_project(project)
+
+        logger.info(f"Toggled alert threshold {threshold_id} to {not current_status} for project {project_id}")
+
+        return {
+            "success": True,
+            "threshold": thresholds[threshold_index]
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to toggle alert threshold {threshold_id} for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to toggle threshold: {str(e)}")
+
+@app.post("/api/projects/{project_id}/documents/upload")
+async def upload_document(project_id: str, file: UploadFile = File(...),
+                        equipment_id: str = None, sensor_type: str = None,
+                        document_type: str = "general"):
+    """Upload a document for domain knowledge"""
+    try:
+        # Validate file type
+        allowed_extensions = ['.pdf', '.docx', '.txt', '.md']
+        file_extension = Path(file.filename).suffix.lower()
+
+        if file_extension not in allowed_extensions:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported file type: {file_extension}. Allowed: {', '.join(allowed_extensions)}"
+            )
+
+        # Validate file size (max 10MB)
+        max_size = 10 * 1024 * 1024  # 10MB
+        if file.size and file.size > max_size:
+            raise HTTPException(
+                status_code=400,
+                detail=f"File too large: {file.size} bytes. Maximum allowed: {max_size} bytes"
+            )
+
+        # Read file contents
+        contents = await file.read()
+
+        try:
+            # Add document to vector store (async processing with content)
+            doc_id = await vector_store.add_document_async(
+                project_id=project_id,
+                file_content=contents,
+                filename=file.filename,
+                equipment_id=equipment_id,
+                sensor_type=sensor_type,
+                document_type=document_type
+            )
+
+            # Update project with document metadata
+            project = db.load_project(project_id)
+            if not project:
+                raise HTTPException(status_code=404, detail="Project not found")
+
+            # Add document to project metadata
+            if 'domain_documents' not in project:
+                project['domain_documents'] = []
+
+            doc_metadata = {
+                'id': doc_id,
+                'filename': file.filename,
+                'file_type': file_extension[1:],  # Remove the dot
+                'equipment_id': equipment_id,
+                'sensor_type': sensor_type,
+                'document_type': document_type,
+                'uploaded_at': datetime.now().isoformat(),
+                'file_size': len(contents),
+                'chunk_count': None  # Will be updated after processing
+            }
+
+            project['domain_documents'].append(doc_metadata)
+            project['updated_at'] = datetime.now().isoformat()
+
+            # Save updated project
+            db.save_project(project)
+
+            logger.info(f"Document uploaded: {file.filename} (ID: {doc_id}) for project {project_id}")
+
+            return {
+                "success": True,
+                "doc_id": doc_id,
+                "filename": file.filename,
+                "message": f"Document '{file.filename}' uploaded successfully. Processing in background.",
+                "status": "processing"
+            }
+
+        except Exception as e:
+            logger.error(f"Failed to add document to vector store: {e}")
+            # Continue with upload even if vector store fails
+            pass
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to upload document for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to upload document: {str(e)}")
+
+@app.get("/api/projects/{project_id}/documents")
+async def get_project_documents(project_id: str):
+    """Get all documents for a project"""
+    try:
+        project = db.load_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        documents = project.get('domain_documents', [])
+
+        return {
+            "documents": documents,
+            "count": len(documents)
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get documents for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get documents: {str(e)}")
+
+@app.delete("/api/projects/{project_id}/documents/{doc_id}")
+async def delete_document(project_id: str, doc_id: str):
+    """Delete a document from a project"""
+    try:
+        project = db.load_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        # Find and remove document from project
+        documents = project.get('domain_documents', [])
+        doc_to_delete = None
+
+        for i, doc in enumerate(documents):
+            if doc['id'] == doc_id:
+                doc_to_delete = doc
+                documents.pop(i)
+                break
+
+        if not doc_to_delete:
+            raise HTTPException(status_code=404, detail="Document not found")
+
+        # Delete from vector store
+        deleted = vector_store.delete_document(doc_id)
+        if not deleted:
+            logger.warning(f"Document {doc_id} not found in vector store during deletion")
+
+        # Update project
+        project['domain_documents'] = documents
+        project['updated_at'] = datetime.now().isoformat()
+        db.save_project(project)
+
+        logger.info(f"Document deleted: {doc_id} from project {project_id}")
+
+        return {
+            "success": True,
+            "message": f"Document '{doc_to_delete['filename']}' deleted successfully"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete document {doc_id} from project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete document: {str(e)}")
+
+@app.get("/api/projects/{project_id}/documents/stats")
+async def get_document_stats(project_id: str):
+    """Get document statistics for a project"""
+    try:
+        # Get vector store stats
+        vector_stats = vector_store.get_document_stats(project_id)
+
+        # Get project document metadata
+        project = db.load_project(project_id)
+        documents = project.get('domain_documents', []) if project else []
+
+        # Calculate additional stats
+        total_size = sum(doc.get('file_size', 0) for doc in documents)
+        file_types = {}
+        equipment_docs = {}
+
+        for doc in documents:
+            # Count file types
+            file_type = doc.get('file_type', 'unknown')
+            file_types[file_type] = file_types.get(file_type, 0) + 1
+
+            # Count equipment associations
+            equipment_id = doc.get('equipment_id')
+            if equipment_id:
+                equipment_docs[equipment_id] = equipment_docs.get(equipment_id, 0) + 1
+
+        return {
+            "total_chunks": vector_stats.get('total_chunks', 0),
+            "unique_documents": len(documents),
+            "total_size_bytes": total_size,
+            "file_types": file_types,
+            "equipment_associations": equipment_docs,
+            "sensor_types": list(set(doc.get('sensor_type') for doc in documents if doc.get('sensor_type')))
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to get document stats for project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get document stats: {str(e)}")
+
+# Project Management Endpoints
+@app.post("/api/projects")
+async def create_project(project: Dict[str, Any]):
+    """Create a new project"""
+    try:
+        # Validate required fields
+        if not project.get('id'):
+            raise HTTPException(status_code=400, detail="Project must have an 'id' field")
+        if not project.get('name'):
+            raise HTTPException(status_code=400, detail="Project must have a 'name' field")
+
+        # Set timestamps
+        project['created_at'] = datetime.now().isoformat()
+        project['updated_at'] = datetime.now().isoformat()
+
+        # Initialize empty arrays if not present
+        project.setdefault('domain_documents', [])
+        project.setdefault('alert_thresholds', [])
+        project.setdefault('graph_layout', {'nodes': [], 'edges': []})
+        project.setdefault('discovered_nodes', [])
+        project.setdefault('description', None)
+        project.setdefault('last_accessed', None)
+        project.setdefault('is_favorite', False)
+
+        # Save to database
+        db.save_project(project)
+
+        return {
+            "status": "created",
+            "project": project
+        }
+    except Exception as e:
+        logger.error(f"Failed to create project: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to create project: {str(e)}")
+
+@app.put("/api/projects/{project_id}")
+async def update_project(project_id: str, project: Dict[str, Any]):
+    """Update an existing project"""
+    try:
+        # Load existing project
+        existing_project = db.load_project(project_id)
+        if not existing_project:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        # Update project data
+        updated_project = {**existing_project, **project}
+        updated_project['id'] = project_id  # Ensure ID is correct
+        updated_project['updated_at'] = datetime.now().isoformat()
+
+        # Save to database
+        db.save_project(updated_project)
+
+        return {
+            "status": "updated",
+            "project": updated_project
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to update project: {str(e)}")
+
+@app.get("/api/projects/{project_id}")
+async def get_project(project_id: str):
+    """Get a specific project"""
+    try:
+        project = db.load_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        return project
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get project: {str(e)}")
+
+@app.get("/api/projects")
+async def list_projects():
+    """List all projects"""
+    try:
+        # Get all project IDs from the projects directory
+        if not db.projects_dir.exists():
+            return {"projects": [], "count": 0}
+
+        projects = []
+        for project_file in db.projects_dir.glob("*.json"):
+            project_id = project_file.stem  # Remove .json extension
+            project = db.load_project(project_id)
+            if project:
+                # Return full project data
+                projects.append(project)
+
+        return {
+            "projects": projects,
+            "count": len(projects)
+        }
+    except Exception as e:
+        logger.error(f"Failed to list projects: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to list projects: {str(e)}")
+
+@app.get("/api/projects/summaries")
+async def list_project_summaries():
+    """List project summaries"""
+    try:
+        # Get all project IDs from the projects directory
+        if not db.projects_dir.exists():
+            return {"projects": [], "count": 0}
+
+        projects = []
+        for project_file in db.projects_dir.glob("*.json"):
+            project_id = project_file.stem  # Remove .json extension
+            project = db.load_project(project_id)
+            if project:
+                # Return summary info
+                projects.append({
+                    "id": project.get("id"),
+                    "name": project.get("name"),
+                    "created_at": project.get("created_at"),
+                    "updated_at": project.get("updated_at"),
+                    "description": project.get("description")
+                })
+
+        return {
+            "projects": projects,
+            "count": len(projects)
+        }
+    except Exception as e:
+        logger.error(f"Failed to list project summaries: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to list project summaries: {str(e)}")
+
+@app.delete("/api/projects/{project_id}")
+async def delete_project(project_id: str):
+    """Delete a project and all its data"""
+    try:
+        # Check if project exists
+        project = db.load_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        # Delete project file
+        project_file = db._get_project_file(project_id)
+        if project_file.exists():
+            project_file.unlink()
+
+        # Delete associated data (messages, sessions, etc.)
+        db.delete_project_data(project_id)
+
+        return {"status": "deleted"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete project {project_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete project: {str(e)}")
 
 @app.get("/health")
 async def health_check():

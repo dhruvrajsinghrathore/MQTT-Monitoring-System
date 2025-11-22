@@ -307,5 +307,42 @@ class DatabaseService:
         stats['total_storage_mb'] = round(total_size / (1024 * 1024), 2)
         return stats
 
+    def _get_project_file(self, project_id: str) -> Path:
+        """Get the file path for a project"""
+        return self.projects_dir / f"{project_id}.json"
+
+    def load_project(self, project_id: str) -> Optional[Dict[str, Any]]:
+        """Load project data from file"""
+        with self._lock:
+            project_file = self._get_project_file(project_id)
+            if project_file.exists():
+                project = self._read_json_file(project_file)
+                if project:
+                    # Ensure project has all required fields
+                    self._ensure_project_fields(project)
+                return project
+            return None
+
+    def _ensure_project_fields(self, project: Dict[str, Any]) -> None:
+        """Ensure project has all required fields with defaults"""
+        project.setdefault('domain_documents', [])
+        project.setdefault('alert_thresholds', [])
+        project.setdefault('graph_layout', {'nodes': [], 'edges': []})
+        project.setdefault('discovered_nodes', [])
+        project.setdefault('description', None)
+        project.setdefault('last_accessed', None)
+        project.setdefault('is_favorite', False)
+
+    def save_project(self, project: Dict[str, Any]) -> None:
+        """Save project data to file"""
+        with self._lock:
+            project_id = project.get('id')
+            if not project_id:
+                raise ValueError("Project must have an 'id' field")
+
+            project_file = self._get_project_file(project_id)
+            self._write_json_file(project_file, project)
+            print(f"💾 Saved project: {project_id}")
+
 # Global database instance
 db = DatabaseService() 

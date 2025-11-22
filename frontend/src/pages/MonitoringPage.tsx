@@ -11,6 +11,7 @@ import {
 } from 'reactflow';
 import CustomNode from '../components/CustomNode';
 import ChatBot from '../components/ChatBot';
+import AlertsPanel from '../components/AlertsPanel';
 import { ArrowLeft, Pause, Play, Settings, Activity, MessageCircle } from 'lucide-react';
 import { useProject } from '../contexts/ProjectContext';
 import { Project } from '../types';
@@ -55,6 +56,9 @@ const MonitoringPage: React.FC = () => {
 
   // Chatbot state
   const [isChatbotOpen, setIsChatbotOpen] = useState(false);
+
+  // Alerts panel state
+  const [isAlertsMinimized, setIsAlertsMinimized] = useState(false);
 
   // Note: Nodes are now updated directly via WebSocket graph_update messages from backend
 
@@ -211,7 +215,16 @@ const MonitoringPage: React.FC = () => {
               if (currentSessionId) {
                 setMessageCount(prev => prev + 1);
               }
-              
+
+            } else if (message.type === 'alert_update') {
+              console.log('🚨 Received alert update:', message.data);
+
+              // Dispatch custom event for AlertsPanel to handle
+              const alertEvent = new CustomEvent('alertUpdate', {
+                detail: message
+              });
+              window.dispatchEvent(alertEvent);
+
             } else if (message.type === 'monitoring_started') {
               console.log('✅ MQTT monitoring started successfully');
               setConnectionStatus('connected');
@@ -425,7 +438,7 @@ const MonitoringPage: React.FC = () => {
               </button>
 
               <button
-                onClick={() => navigate(`/projects/${project.id}/configuration`)}
+                onClick={() => navigate(`/config/${project.id}`)}
                 className="bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded-lg flex items-center space-x-2"
               >
                 <Settings className="w-4 h-4" />
@@ -491,13 +504,20 @@ const MonitoringPage: React.FC = () => {
 
       {/* Chatbot */}
       {isChatbotOpen && (
-        <ChatBot 
-          isOpen={isChatbotOpen} 
+        <ChatBot
+          isOpen={isChatbotOpen}
           onClose={() => setIsChatbotOpen(false)}
           context={`project "${project.name}" monitoring dashboard`}
           pageType="monitor"
         />
       )}
+
+      {/* Alerts Panel */}
+      <AlertsPanel
+        projectId={project?.id}
+        isMinimized={isAlertsMinimized}
+        onToggleMinimize={() => setIsAlertsMinimized(!isAlertsMinimized)}
+      />
     </div>
   );
 };

@@ -57,3 +57,8 @@ tmp/
 temp/
 
 *.xlsx
+
+backend/data/*
+
+# Test data files
+*.csv

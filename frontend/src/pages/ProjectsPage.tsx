@@ -17,9 +17,14 @@ const ProjectsPage: React.FC = () => {
     loadProjects();
   }, []);
 
-  const loadProjects = () => {
-    const projectSummaries = ProjectService.getProjectSummaries();
-    setProjects(projectSummaries);
+  const loadProjects = async () => {
+    try {
+      const projectSummaries = await ProjectService.getProjectSummaries();
+      setProjects(projectSummaries);
+    } catch (error) {
+      console.error('Failed to load projects:', error);
+      setProjects([]);
+    }
   };
 
   const filteredAndSortedProjects = projects
@@ -45,30 +50,49 @@ const ProjectsPage: React.FC = () => {
   };
 
   const handleOpenProject = async (projectId: string) => {
-    const project = ProjectService.getProject(projectId);
-    if (project) {
-      // Test connection first
-      navigate('/monitor', { state: { project } });
+    try {
+      const project = await ProjectService.getProject(projectId);
+      if (project) {
+        // Test connection first
+        navigate('/monitor', { state: { project } });
+      }
+    } catch (error) {
+      console.error('Failed to load project:', error);
+      alert('Failed to load project. Please try again.');
     }
   };
 
-  const handleEditProject = (projectId: string) => {
-    const project = ProjectService.getProject(projectId);
-    if (project) {
-      navigate('/editor', { state: { project } });
+  const handleEditProject = async (projectId: string) => {
+    try {
+      const project = await ProjectService.getProject(projectId);
+      if (project) {
+        navigate('/editor', { state: { project } });
+      }
+    } catch (error) {
+      console.error('Failed to load project:', error);
+      alert('Failed to load project. Please try again.');
     }
   };
 
-  const handleDeleteProject = (projectId: string) => {
+  const handleDeleteProject = async (projectId: string) => {
     if (window.confirm('Are you sure you want to delete this project?')) {
-      ProjectService.deleteProject(projectId);
-      loadProjects();
+      try {
+        await ProjectService.deleteProject(projectId);
+        await loadProjects();
+      } catch (error) {
+        console.error('Failed to delete project:', error);
+        alert('Failed to delete project. Please try again.');
+      }
     }
   };
 
-  const handleToggleFavorite = (projectId: string) => {
-    ProjectService.toggleFavorite(projectId);
-    loadProjects();
+  const handleToggleFavorite = async (projectId: string) => {
+    try {
+      await ProjectService.toggleFavorite(projectId);
+      await loadProjects();
+    } catch (error) {
+      console.error('Failed to toggle favorite:', error);
+    }
   };
 
   const handleExportProject = (projectId: string) => {
@@ -85,8 +109,8 @@ const ProjectsPage: React.FC = () => {
     setIsImporting(true);
     try {
       const project = await ProjectService.uploadProjectFile(file);
-      ProjectService.saveProject(project);
-      loadProjects();
+      await ProjectService.saveProject(project);
+      await loadProjects();
     } catch (error) {
       alert('Failed to import project: ' + (error as Error).message);
     } finally {

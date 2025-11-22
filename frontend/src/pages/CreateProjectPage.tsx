@@ -107,7 +107,7 @@ const CreateProjectPage: React.FC = () => {
     }
   };
 
-  const createProject = () => {
+  const createProject = async () => {
     if (!projectName.trim()) {
       alert('Please enter a project name');
       return;
@@ -124,14 +124,19 @@ const CreateProjectPage: React.FC = () => {
       updated_at: new Date().toISOString()
     };
 
-    // Save project to localStorage
-    ProjectService.saveProject(newProject);
-    
-    // Set in context for immediate use
-    setProject(newProject);
-    setDiscoveredNodes(discoveredNodes);
-    
-    navigate('/editor');
+    try {
+      // Save project to backend and localStorage
+      await ProjectService.saveProject(newProject);
+
+      // Set in context for immediate use
+      setProject(newProject);
+      setDiscoveredNodes(discoveredNodes);
+
+      navigate('/editor');
+    } catch (error) {
+      console.error('Failed to create project:', error);
+      alert('Failed to create project. Please try again.');
+    }
   };
 
   const nextStep = () => {

@@ -1,7 +1,9 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Handle, Position, NodeProps } from 'reactflow';
 import { useNavigate } from 'react-router-dom';
 import { useProject } from '../contexts/ProjectContext';
+import SensorDetailModal from './SensorDetailModal';
+import { API_BASE_URL } from '../config/api';
 import { 
   Thermometer, 
   Gauge, 
@@ -23,6 +25,7 @@ interface CustomNodeData {
   label: string;
   equipment_id: string;
   equipment_type: string;
+  image_url?: string;
   sensors?: Array<{
     sensor_type: string;
     value: number | string | object;
@@ -97,7 +100,8 @@ const formatValue = (value: number | string | object, unit: string) => {
 const CustomNode: React.FC<NodeProps<CustomNodeData>> = ({ data }) => {
   const navigate = useNavigate();
   const { project } = useProject();
-  
+  const [showSensorModal, setShowSensorModal] = useState(false);
+
   // Safety check for undefined data
   if (!data) {
     return (
@@ -109,10 +113,30 @@ const CustomNode: React.FC<NodeProps<CustomNodeData>> = ({ data }) => {
 
   const gradientColor = getStatusColor(data.status || 'normal');
   const equipmentIcon = getEquipmentIcon(data.equipment_type || 'unknown');
-  
-  const timeAgo = data.last_updated 
+
+  const timeAgo = data.last_updated
     ? formatDistanceToNow(new Date(data.last_updated), { addSuffix: true })
     : 'Never';
+
+  // Check if node has an image
+  const hasImage = !!data.image_url;
+
+  // Handle node click
+  const handleNodeClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (hasImage) {
+      // If node has image, show sensor modal instead of navigating
+      setShowSensorModal(true);
+    } else {
+      // If no image, navigate to equipment detail page
+      navigate(`/equipment/${data.equipment_id}`, {
+        state: {
+          equipment: data,
+          project: project
+        }
+      });
+    }
+  };
 
 
 
@@ -125,76 +149,65 @@ const CustomNode: React.FC<NodeProps<CustomNodeData>> = ({ data }) => {
         <div className="absolute -inset-1 bg-gradient-to-r from-green-400 to-green-600 rounded-xl opacity-30 animate-pulse pointer-events-none" />
       )}
       
-      <div 
+      <div
         className={`
           min-w-[220px] p-4 rounded-xl shadow-lg border border-white/20
           bg-gradient-to-br ${gradientColor}
           transform transition-all duration-300 hover:scale-105 hover:shadow-xl
           cursor-pointer relative z-10
         `}
+        onClick={handleNodeClick}
       >
-        {/* Header */}
-        <div className="flex items-center gap-3 mb-3">
-          <div className="p-2 bg-white/20 rounded-md">
-            {equipmentIcon}
-          </div>
-          <div className="flex-1 min-w-0">
-            <h3 className="font-semibold text-white text-sm truncate hover:text-blue-200 transition-colors">
+        {/* Always show image - with fallback to equipment info if no image */}
+        <div className="relative">
+          {hasImage ? (
+            <img
+              src={`${API_BASE_URL}${data.image_url}`}
+              alt={`${data.equipment_id} equipment`}
+              className="w-full h-32 object-cover rounded-lg"
+            />
+          ) : (
+            /* Placeholder when no image is available */
+            <div className="w-full h-32 bg-gray-300 rounded-lg flex items-center justify-center">
+              <div className="text-center">
+                <div className="p-2 bg-white/20 rounded-md mb-2 inline-block">
+                  {equipmentIcon}
+                </div>
+                <p className="text-gray-600 text-xs">No image uploaded</p>
+              </div>
+            </div>
+          )}
+
+          {/* Overlay with equipment info */}
+          <div className="absolute bottom-0 left-0 right-0 bg-black/70 text-white p-2 rounded-b-lg">
+            <h3 className="font-semibold text-sm truncate">
               {data.equipment_id || data.label || 'Unknown Equipment'}
             </h3>
             <p className="text-white/80 text-xs capitalize">
               {data.equipment_type?.replace('_', ' ') || 'Unknown'}
             </p>
-          </div>
-        </div>
-        
-        {/* Sensors */}
-        <div className="mb-3 space-y-2">
-          {data.sensors && data.sensors.length > 0 ? (
-            data.sensors.map((sensor, index) => (
-              <div key={index} className="text-white text-xs bg-black/20 rounded-md p-2">
-                <div className="flex items-center gap-2 mb-1">
-                  {getSensorIcon(sensor.sensor_type)}
-                  <span className="font-medium capitalize">
-                    {sensor.sensor_type?.replace('_', ' ')}
-                  </span>
-                </div>
-                <div className="font-mono text-white/90 ml-5">
-                  {formatValue(sensor.value || 0, sensor.unit || '')}
-                </div>
-              </div>
-            ))
-          ) : (
-            <div className="text-white/60 text-xs text-center py-2">
-              No sensor data
-            </div>
-          )}
-        </div>
-        
-        {/* Status and Workflow */}
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <span className="text-xs text-white/70">Status:</span>
-            <span className="text-xs font-medium text-white bg-white/20 px-2 py-1 rounded-full">
-              {data.status || 'unknown'}
-            </span>
-          </div>
-          
-          {data.workflow_step && (
-            <div className="flex items-center justify-between">
-              <span className="text-xs text-white/70">Step:</span>
-              <span className="text-xs font-medium text-white bg-white/20 px-2 py-1 rounded-full">
-                {data.workflow_step}
+            {/* Status indicator */}
+            <div className="flex items-center justify-between mt-1">
+              <span className={`px-2 py-0.5 text-xs rounded-full font-medium ${
+                data.status === 'active' ? 'bg-green-500 text-white' :
+                data.status === 'warning' ? 'bg-yellow-500 text-black' :
+                data.status === 'error' ? 'bg-red-500 text-white' :
+                'bg-blue-500 text-white'
+              }`}>
+                {data.status || 'unknown'}
               </span>
+              <span className="text-xs text-white/80">{timeAgo}</span>
             </div>
-          )}
-          
-          <div className="flex items-center gap-1 text-xs text-white/60 mt-2">
-            <Clock className="w-3 h-3" />
-            <span>{timeAgo}</span>
           </div>
         </div>
       </div>
+
+      {/* Sensor Detail Modal */}
+      <SensorDetailModal
+        isOpen={showSensorModal && hasImage}
+        onClose={() => setShowSensorModal(false)}
+        equipment={data}
+      />
       
       <Handle type="source" position={Position.Bottom} className="opacity-0" />
     </div>
