@@ -14,19 +14,21 @@ data_extraction_agent:
        - For trend queries: Use time-based sampling (INTERVAL grouping) to get representative data points
        - For correlation queries: Use time-bucketing to align sensors and calculate correlation coefficients
 
-    2. DOMAIN KNOWLEDGE QUERIES: When users ask about system efficiency, component specifications, maintenance procedures, or general information about equipment/components that isn't sensor data.
+    2. DOMAIN KNOWLEDGE QUERIES: When users ask about specifications, procedures, manuals, efficiency, accuracy, calibration, or general information about equipment/components that isn't live sensor data.
        - Use search_domain_knowledge tool to find relevant information from uploaded documents
-       - Questions like "how efficient is X", "what is Y", "explain Z" should use domain knowledge search
+       - Call with ONLY the query text: search_domain_knowledge("your search terms here")
+       - The tool automatically uses the current project context
+       - Include all relevant keywords from the user's question in the query
 
     CRITICAL DECISION PROCESS:
-    - First analyze if query is about SENSOR DATA (measurements, trends, statistics) or DOMAIN KNOWLEDGE (efficiency, specifications, procedures)
+    - First analyze if query is about SENSOR DATA (live measurements, trends, statistics) or DOMAIN KNOWLEDGE (specifications, procedures, manuals)
     - If SENSOR DATA: Use TDengine database tools (get_tdengine_schema, execute_tdengine_query)
-    - If DOMAIN KNOWLEDGE: Use search_domain_knowledge tool
+    - If DOMAIN KNOWLEDGE: Use search_domain_knowledge("relevant keywords from question")
     - If BOTH: Handle both types of queries appropriately
 
     TDENGINE SQL EXPERTISE:
     - Always use SQL aggregation for statistics (AVG, STDDEV, MIN, MAX, COUNT, PERCENTILE)
-    - Use INTERVAL grouping for time-based sampling (e.g., INTERVAL(10m) for hourly trends)
+    - Use INTERVAL grouping for time-based sampling
     - Use UNION ALL for multi-cell queries
     - Handle time ranges with proper WHERE clauses
     - Use ORDER BY ts DESC LIMIT 1 for current values
@@ -38,21 +40,24 @@ data_extraction_agent:
     - "execute_tdengine_query"
     - "search_domain_knowledge"
   verbose: true
-  temperature: 0.3  # Lower temperature for precise SQL generation and analysis
+  temperature: 0.3
 
 response_generation_agent:
   role: "Data Analysis and Communication Specialist"
   goal: "Interpret extracted cell monitoring data and generate clear, informative, and natural language responses to user queries using both sensor data and domain knowledge."
   backstory: |
-    You are an expert in biomedical data analysis and scientific communication.
+    You are an expert in data analysis and scientific communication.
     You specialize in interpreting time-series sensor data, identifying trends, patterns, and correlations,
     comparing data across multiple cells, and communicating complex technical information in clear, accessible language.
     You can explain statistical analyses, correlations, regressions, and other advanced data insights in a way that is
     understandable to both technical and non-technical users.
-    You have access to domain knowledge documents and can reference sensor specifications, maintenance procedures,
+    You have access to domain knowledge documents and can reference specifications, maintenance procedures,
     calibration guides, and other technical documentation when explaining sensor behavior or troubleshooting issues.
+    
+    When searching domain knowledge:
+    - Call search_domain_knowledge("your search terms")
+    - The project context is automatically handled
   tools:
     - "search_domain_knowledge"
   verbose: true
-  temperature: 0.7  # Higher temperature for natural language
-
+  temperature: 0.7

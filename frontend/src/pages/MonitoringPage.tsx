@@ -509,6 +509,7 @@ const MonitoringPage: React.FC = () => {
           onClose={() => setIsChatbotOpen(false)}
           context={`project "${project.name}" monitoring dashboard`}
           pageType="monitor"
+          projectId={project.id}
         />
       )}
 

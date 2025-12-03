@@ -31,6 +31,12 @@ const ConfigurationPage: React.FC = () => {
   // Document management
   const [documents, setDocuments] = useState<DomainDocument[]>([]);
   const [isUploadingDocument, setIsUploadingDocument] = useState(false);
+  
+  // Document upload affiliation state
+  const [affiliationType, setAffiliationType] = useState<'general' | 'equipment' | 'sensor'>('general');
+  const [selectedEquipmentId, setSelectedEquipmentId] = useState<string>('');
+  const [selectedSensorType, setSelectedSensorType] = useState<string>('');
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
 
   // Alert management
   const [alertThresholds, setAlertThresholds] = useState<AlertThreshold[]>([]);
@@ -115,16 +121,30 @@ const ConfigurationPage: React.FC = () => {
     }
   };
 
-  const uploadDocument = async (file: File, equipmentId?: string, sensorType?: string) => {
-    if (!project?.id) return;
+  const handleFileSelect = (file: File) => {
+    setPendingFile(file);
+  };
+
+  const handleUploadWithAffiliation = async () => {
+    if (!project?.id || !pendingFile) return;
 
     setIsUploadingDocument(true);
 
     try {
       const formData = new FormData();
-      formData.append('file', file);
-      if (equipmentId) formData.append('equipment_id', equipmentId);
-      if (sensorType) formData.append('sensor_type', sensorType);
+      formData.append('file', pendingFile);
+      
+      // Add affiliation based on type
+      if (affiliationType === 'equipment' || affiliationType === 'sensor') {
+        if (selectedEquipmentId) {
+          formData.append('equipment_id', selectedEquipmentId);
+        }
+      }
+      if (affiliationType === 'sensor') {
+        if (selectedSensorType) {
+          formData.append('sensor_type', selectedSensorType);
+        }
+      }
 
       const response = await fetch(
         getApiUrl(API_ENDPOINTS.DOCUMENTS_UPLOAD).replace('{project_id}', project.id),
@@ -138,6 +158,12 @@ const ConfigurationPage: React.FC = () => {
         const result = await response.json();
         await loadDocuments(); // Refresh document list
         console.log('Document uploaded successfully:', result);
+        
+        // Reset form
+        setPendingFile(null);
+        setAffiliationType('general');
+        setSelectedEquipmentId('');
+        setSelectedSensorType('');
       } else {
         throw new Error(`Upload failed: ${response.status}`);
       }
@@ -147,6 +173,43 @@ const ConfigurationPage: React.FC = () => {
     } finally {
       setIsUploadingDocument(false);
     }
+  };
+
+  const cancelUpload = () => {
+    setPendingFile(null);
+    setAffiliationType('general');
+    setSelectedEquipmentId('');
+    setSelectedSensorType('');
+  };
+
+  // Get unique equipment IDs from discovered nodes
+  const getEquipmentOptions = (): string[] => {
+    if (!project?.discovered_nodes) return [];
+    const equipmentIds = new Set<string>();
+    project.discovered_nodes.forEach(node => {
+      if (node.equipment_id) {
+        equipmentIds.add(node.equipment_id);
+      }
+    });
+    return Array.from(equipmentIds).sort();
+  };
+
+  // Get sensor types from discovered nodes for selected equipment
+  const getSensorOptions = (): string[] => {
+    if (!project?.discovered_nodes || !selectedEquipmentId) return [];
+    const sensorTypes = new Set<string>();
+    project.discovered_nodes.forEach(node => {
+      if (node.equipment_id === selectedEquipmentId && node.topics) {
+        node.topics.forEach(topic => {
+          // Extract sensor name from topic (last part)
+          const parts = topic.split('/');
+          if (parts.length > 0) {
+            sensorTypes.add(parts[parts.length - 1]);
+          }
+        });
+      }
+    });
+    return Array.from(sensorTypes).sort();
   };
 
   const deleteDocument = async (docId: string) => {
@@ -450,10 +513,10 @@ const ConfigurationPage: React.FC = () => {
           <div className="flex items-center justify-between p-6 border-b">
             <div className="flex items-center">
               <button
-                onClick={() => navigate('/')}
+                onClick={() => navigate(`/monitor/${projectId}`)}
                 className="mr-4 p-2 hover:bg-gray-100 rounded-lg"
               >
-                ← Back to Projects
+                ← Back to Monitoring
               </button>
               <h1 className="text-2xl font-bold text-gray-900">Project Configuration</h1>
               {project && (
@@ -674,28 +737,170 @@ const ConfigurationPage: React.FC = () => {
         {/* Document Upload */}
         <div className="minimal-card p-6 mb-6">
           <h3 className="text-md font-semibold text-gray-900 mb-4">Upload Documents</h3>
-          <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-gray-400 transition-colors">
-            <Upload className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-            <p className="text-gray-600 mb-2">Drag and drop files here, or click to select</p>
-            <p className="text-sm text-gray-500 mb-4">Supported formats: PDF, DOCX, TXT, MD (max 10MB)</p>
-            <input
-              type="file"
-              accept=".pdf,.docx,.txt,.md"
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) uploadDocument(file);
-              }}
-              className="hidden"
-              id="document-upload"
-              disabled={isUploadingDocument}
-            />
-            <label
-              htmlFor="document-upload"
-              className="minimal-button-primary cursor-pointer inline-block"
-            >
-              {isUploadingDocument ? 'Uploading...' : 'Select Files'}
-            </label>
-          </div>
+          
+          {!pendingFile ? (
+            /* File Selection */
+            <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-gray-400 transition-colors">
+              <Upload className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+              <p className="text-gray-600 mb-2">Drag and drop files here, or click to select</p>
+              <p className="text-sm text-gray-500 mb-4">Supported formats: PDF, DOCX, TXT, MD (max 10MB)</p>
+              <input
+                type="file"
+                accept=".pdf,.docx,.txt,.md"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) handleFileSelect(file);
+                }}
+                className="hidden"
+                id="document-upload"
+                disabled={isUploadingDocument}
+              />
+              <label
+                htmlFor="document-upload"
+                className="minimal-button-primary cursor-pointer inline-block"
+              >
+                Select File
+              </label>
+            </div>
+          ) : (
+            /* Affiliation Selection */
+            <div className="space-y-4">
+              {/* Selected File Info */}
+              <div className="flex items-center justify-between p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                <div className="flex items-center gap-2">
+                  <FileText className="w-5 h-5 text-blue-600" />
+                  <span className="font-medium text-blue-900">{pendingFile.name}</span>
+                  <span className="text-sm text-blue-600">
+                    ({(pendingFile.size / 1024 / 1024).toFixed(2)} MB)
+                  </span>
+                </div>
+                <button
+                  onClick={cancelUpload}
+                  className="text-blue-600 hover:text-blue-800 text-sm"
+                >
+                  Change file
+                </button>
+              </div>
+
+              {/* Affiliation Type Selector */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Document Affiliation
+                </label>
+                <p className="text-xs text-gray-500 mb-2">
+                  Choose what this document is about. This helps the AI find relevant information.
+                </p>
+                <select
+                  value={affiliationType}
+                  onChange={(e) => {
+                    setAffiliationType(e.target.value as 'general' | 'equipment' | 'sensor');
+                    setSelectedEquipmentId('');
+                    setSelectedSensorType('');
+                  }}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="general">General (applies to entire system)</option>
+                  <option value="equipment">Equipment-specific (applies to one subsystem)</option>
+                  <option value="sensor">Sensor-specific (applies to one sensor)</option>
+                </select>
+              </div>
+
+              {/* Equipment Selector (for equipment and sensor types) */}
+              {(affiliationType === 'equipment' || affiliationType === 'sensor') && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Equipment / Subsystem
+                  </label>
+                  <select
+                    value={selectedEquipmentId}
+                    onChange={(e) => {
+                      setSelectedEquipmentId(e.target.value);
+                      setSelectedSensorType('');
+                    }}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="">Select equipment...</option>
+                    {getEquipmentOptions().map(equipmentId => (
+                      <option key={equipmentId} value={equipmentId}>
+                        {equipmentId}
+                      </option>
+                    ))}
+                  </select>
+                  {getEquipmentOptions().length === 0 && (
+                    <p className="text-xs text-amber-600 mt-1">
+                      No equipment discovered yet. Run MQTT discovery first, or type equipment ID manually.
+                    </p>
+                  )}
+                  {/* Manual input fallback */}
+                  {getEquipmentOptions().length === 0 && (
+                    <input
+                      type="text"
+                      value={selectedEquipmentId}
+                      onChange={(e) => setSelectedEquipmentId(e.target.value)}
+                      placeholder="Enter equipment ID manually"
+                      className="w-full mt-2 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  )}
+                </div>
+              )}
+
+              {/* Sensor Selector (only for sensor type) */}
+              {affiliationType === 'sensor' && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Sensor Type
+                  </label>
+                  <select
+                    value={selectedSensorType}
+                    onChange={(e) => setSelectedSensorType(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    disabled={!selectedEquipmentId}
+                  >
+                    <option value="">Select sensor...</option>
+                    {getSensorOptions().map(sensorType => (
+                      <option key={sensorType} value={sensorType}>
+                        {sensorType}
+                      </option>
+                    ))}
+                  </select>
+                  {!selectedEquipmentId && (
+                    <p className="text-xs text-gray-500 mt-1">
+                      Select equipment first to see available sensors
+                    </p>
+                  )}
+                  {selectedEquipmentId && getSensorOptions().length === 0 && (
+                    <input
+                      type="text"
+                      value={selectedSensorType}
+                      onChange={(e) => setSelectedSensorType(e.target.value)}
+                      placeholder="Enter sensor type manually"
+                      className="w-full mt-2 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  )}
+                </div>
+              )}
+
+              {/* Upload Button */}
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  onClick={cancelUpload}
+                  className="px-4 py-2 text-gray-600 hover:text-gray-800 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleUploadWithAffiliation}
+                  disabled={isUploadingDocument || 
+                    (affiliationType === 'equipment' && !selectedEquipmentId) ||
+                    (affiliationType === 'sensor' && (!selectedEquipmentId || !selectedSensorType))
+                  }
+                  className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed"
+                >
+                  {isUploadingDocument ? 'Uploading...' : 'Upload Document'}
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Documents List */}
@@ -709,32 +914,60 @@ const ConfigurationPage: React.FC = () => {
             </div>
           ) : (
             <div className="space-y-3">
-              {documents.map((doc) => (
-                <div key={doc.id} className="flex items-center justify-between p-4 border border-gray-200 rounded-lg">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2">
-                      <FileText className="w-4 h-4 text-gray-400" />
-                      <span className="font-medium text-gray-900">{doc.filename}</span>
-                      <span className="text-xs px-2 py-1 bg-gray-100 text-gray-600 rounded">
-                        {doc.file_type?.toUpperCase()}
-                      </span>
+              {documents.map((doc) => {
+                // Determine affiliation level for badge
+                const getAffiliationBadge = () => {
+                  if (doc.sensor_type && doc.equipment_id) {
+                    return { label: 'Sensor', color: 'bg-purple-100 text-purple-800' };
+                  } else if (doc.equipment_id) {
+                    return { label: 'Equipment', color: 'bg-blue-100 text-blue-800' };
+                  }
+                  return { label: 'General', color: 'bg-green-100 text-green-800' };
+                };
+                const badge = getAffiliationBadge();
+
+                return (
+                  <div key={doc.id} className="flex items-center justify-between p-4 border border-gray-200 rounded-lg">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <FileText className="w-4 h-4 text-gray-400" />
+                        <span className="font-medium text-gray-900">{doc.filename}</span>
+                        <span className="text-xs px-2 py-1 bg-gray-100 text-gray-600 rounded">
+                          {doc.file_type?.toUpperCase()}
+                        </span>
+                        <span className={`text-xs px-2 py-1 rounded ${badge.color}`}>
+                          {badge.label}
+                        </span>
+                      </div>
+                      <div className="text-sm text-gray-600 mt-1">
+                        {doc.equipment_id && (
+                          <span className="inline-flex items-center mr-2">
+                            <span className="text-gray-500">Equipment:</span>
+                            <span className="ml-1 font-medium">{doc.equipment_id}</span>
+                          </span>
+                        )}
+                        {doc.sensor_type && (
+                          <span className="inline-flex items-center mr-2">
+                            <span className="text-gray-500">Sensor:</span>
+                            <span className="ml-1 font-medium">{doc.sensor_type}</span>
+                          </span>
+                        )}
+                        <span className="text-gray-400">•</span>
+                        <span className="ml-2">{new Date(doc.uploaded_at).toLocaleDateString()}</span>
+                        <span className="text-gray-400 mx-1">•</span>
+                        <span>{(doc.file_size / 1024 / 1024).toFixed(2)} MB</span>
+                      </div>
                     </div>
-                    <div className="text-sm text-gray-600 mt-1">
-                      {doc.equipment_id && <span>Equipment: {doc.equipment_id} • </span>}
-                      {doc.sensor_type && <span>Sensor: {doc.sensor_type} • </span>}
-                      {new Date(doc.uploaded_at).toLocaleDateString()} •
-                      {(doc.file_size / 1024 / 1024).toFixed(2)} MB
-                    </div>
+                    <button
+                      onClick={() => deleteDocument(doc.id)}
+                      className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                      title="Delete document"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
                   </div>
-                  <button
-                    onClick={() => deleteDocument(doc.id)}
-                    className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                    title="Delete document"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>

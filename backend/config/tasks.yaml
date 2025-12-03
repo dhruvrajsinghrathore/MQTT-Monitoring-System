@@ -3,7 +3,7 @@ data_extraction_task:
     Analyze the user query and determine if it requires sensor data from the database or domain knowledge from uploaded documents.
 
     For sensor data queries: Extract relevant data from the time-series database using SQL queries.
-    For domain knowledge queries (e.g., "how efficient is X", "what is Y", "explain Z"): Use the search_domain_knowledge tool to find information from uploaded documents.
+    For domain knowledge queries (e.g., "how efficient is X", "what is Y", "explain Z", "what is the accuracy of"): Use the search_domain_knowledge tool to find information from uploaded documents.
 
     Your goal is to understand what information the user needs and retrieve it from the appropriate source.
     
@@ -18,14 +18,30 @@ data_extraction_task:
     1. Query Type Analysis (CRITICAL - First Step):
        - Determine if query is about SENSOR DATA or DOMAIN KNOWLEDGE OR BOTH
        - SENSOR DATA: Questions about measurements, readings, trends, statistics, correlations from sensors/cells (e.g., "what is the temperature", "show pressure trends")
-       - DOMAIN KNOWLEDGE: Questions about system efficiency, specifications, procedures, explanations (e.g., "how efficient is agentgit", "what is the maintenance procedure")
-       - If DOMAIN KNOWLEDGE: Skip to step 6 and use search_domain_knowledge tool
+       - DOMAIN KNOWLEDGE: Questions about specifications, procedures, explanations, efficiency, manuals (e.g., "what is the accuracy of X", "how efficient is Y", "what is the maintenance procedure")
+       - If DOMAIN KNOWLEDGE: Go to Domain Knowledge Search section below
        - If SENSOR DATA: Continue with database analysis below
 
        - If BOTH: Split query into two parts:
          - Part 1: Sensor data query (using database)
          - Part 2: Domain knowledge query (using search_domain_knowledge tool)
          - Return structured JSON for both parts
+    
+    DOMAIN KNOWLEDGE SEARCH (CRITICAL - Read Carefully):
+       When searching domain knowledge documents:
+       
+       a) Call search_domain_knowledge with ONLY the query text:
+          - Include ALL relevant keywords from the user's question
+          
+       b) The tool ONLY takes a query string parameter - nothing else
+          - The project context is automatically handled
+          - No equipment_id, sensor_type, or other parameters needed
+          
+       c) The semantic search automatically finds relevant documents
+          - It searches all documents in the project
+          - Higher similarity scores indicate better matches
+          
+       d) If search returns no results, inform user that no relevant documents were found
     2. Schema Discovery (for sensor data queries):
        - Determine which tables/cells are relevant based on query
        - If specific cells mentioned: Get schema for those cells

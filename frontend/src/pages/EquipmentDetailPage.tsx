@@ -567,6 +567,7 @@ const EquipmentDetailPage: React.FC = () => {
           context={`equipment "${equipment?.equipment_id || equipmentId}" detail view`}
           pageType="equipment"
           cellId={equipment?.equipment_id || equipmentId}
+          projectId={project?.id}
         />
       )}
     </div>

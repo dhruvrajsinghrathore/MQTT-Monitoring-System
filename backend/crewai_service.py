@@ -31,7 +31,8 @@ class CrewAIService:
         user_query: str,
         page_type: str = "monitor",
         cell_id: Optional[str] = None,
-        references: Optional[List[str]] = None
+        references: Optional[List[str]] = None,
+        project_id: Optional[str] = None
     ) -> str:
         """
         Process user query using CrewAI
@@ -41,6 +42,7 @@ class CrewAIService:
             page_type: 'monitor' or 'equipment'
             cell_id: Optional cell_id if on equipment page
             references: List of @references from frontend
+            project_id: The current project ID for domain knowledge searches
         
         Returns:
             Natural language response string
@@ -51,7 +53,8 @@ class CrewAIService:
                 user_query=user_query,
                 page_type=page_type,
                 cell_id=cell_id,
-                references=references or []
+                references=references or [],
+                project_id=project_id
             )
             return response
         except Exception as e:
@@ -60,4 +63,3 @@ class CrewAIService:
 
 # Global instance
 crewai_service = CrewAIService()
-

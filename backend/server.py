@@ -805,6 +805,7 @@ async def chatbot_query(request: dict):
         page_type = request.get('page_type', 'monitor')  # 'monitor' or 'equipment'
         cell_id = request.get('cell_id', None)
         references = request.get('references', [])  # Get @ references from frontend
+        project_id = request.get('project_id', None)  # Get project_id from frontend
         
         if not user_query:
             raise HTTPException(status_code=400, detail="Query is required")
@@ -814,7 +815,8 @@ async def chatbot_query(request: dict):
             user_query=user_query,
             page_type=page_type,
             cell_id=cell_id,
-            references=references
+            references=references,
+            project_id=project_id
         )
         
         return {
@@ -1482,8 +1484,8 @@ async def delete_document(project_id: str, doc_id: str):
         if not doc_to_delete:
             raise HTTPException(status_code=404, detail="Document not found")
 
-        # Delete from vector store
-        deleted = vector_store.delete_document(doc_id)
+        # Delete from vector store (now requires project_id for per-project collections)
+        deleted = vector_store.delete_document(project_id, doc_id)
         if not deleted:
             logger.warning(f"Document {doc_id} not found in vector store during deletion")
 

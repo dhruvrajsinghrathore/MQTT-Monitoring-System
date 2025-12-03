@@ -15,6 +15,9 @@ pyyaml>=6.0
 # Vector store dependencies
 chromadb>=0.4.0
 ollama>=0.2.0
-PyPDF2>=3.0.0
-python-docx>=1.1.0
 langchain-text-splitters>=0.0.1
+# Document processing with Unstructured.io (text, tables, OCR)
+unstructured[all-docs]>=0.10.0
+pdf2image>=1.16.0
+pytesseract>=0.3.10
+nest_asyncio>=1.5.0

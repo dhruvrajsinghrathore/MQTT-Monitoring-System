@@ -23,12 +23,13 @@ interface ChatBotProps {
   context?: string; // Additional context for the chatbot
   pageType?: 'monitor' | 'equipment'; // Page type for context
   cellId?: string; // Cell ID for equipment page
+  projectId?: string; // Project ID for domain knowledge searches
 }
 
 const STORAGE_KEY = 'mqtt-chat-sessions';
 const MAX_SESSIONS = 10;
 
-const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose, context, pageType = 'monitor', cellId }) => {
+const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose, context, pageType = 'monitor', cellId, projectId }) => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
@@ -449,7 +450,8 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose, context, pageType = 
           query: currentQuery,
           page_type: pageType,
           cell_id: cellId,
-          references: references // Send parsed references to backend
+          references: references, // Send parsed references to backend
+          project_id: projectId // Send project_id for domain knowledge searches
         })
       });
 

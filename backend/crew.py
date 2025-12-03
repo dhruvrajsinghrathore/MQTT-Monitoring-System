@@ -194,7 +194,8 @@ class ChatbotCrew:
         user_query: str,
         page_type: str = "monitor",
         cell_id: Optional[str] = None,
-        references: Optional[List[str]] = None
+        references: Optional[List[str]] = None,
+        project_id: Optional[str] = None
     ) -> str:
         """
         Process user query using CrewAI workflow
@@ -204,11 +205,16 @@ class ChatbotCrew:
             page_type: 'monitor' or 'equipment'
             cell_id: Optional cell_id if on equipment page
             references: List of @references from frontend
+            project_id: The current project ID for domain knowledge searches
         
         Returns:
             Natural language response string
         """
         references = references or []
+        
+        # Set project_id in global context for tools to access
+        import tools.vector_search_tool as vst
+        vst._current_project_id = project_id
         
         try:
             # Build context for the query
@@ -216,6 +222,7 @@ class ChatbotCrew:
 Page Type: {page_type}
 Cell ID (if on equipment page): {cell_id or "N/A (monitor page)"}
 @References: {', '.join(references) if references else "None"}
+Project ID: {project_id or "Not specified"}
 """
             
             # Build full context string for first task
