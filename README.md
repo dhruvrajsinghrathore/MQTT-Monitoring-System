@@ -2,6 +2,9 @@
 
 A comprehensive real-time IoT analytics platform that ingests live MQTT sensor data, stores it in TDengine time-series database, and provides an interactive dashboard with an AI-powered chatbot for natural language querying of sensor data and domain knowledge.
 
+![Project Screenshot](MQTT.jpeg)
+
+
 ## 🎯 Project Overview
 
 This platform enables real-time monitoring and analysis of IoT sensor data through:
